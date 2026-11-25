@@ -1,0 +1,10 @@
+node_modules/
+data/portal.db
+data/portal.db-shm
+data/portal.db-wal
+*.log
+.env
+.env.*
+coverage/
+.DS_Store
+.idea/

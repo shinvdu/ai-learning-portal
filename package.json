@@ -1,0 +1,35 @@
+{
+  "name": "ai-learning-portal",
+  "version": "1.0.0",
+  "description": "A zero-dependency Node.js + SQLite demo portal for courses, knowledge bases, and learning analytics.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AI Learning Portal contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shinvdu/ai-learning-portal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shinvdu/ai-learning-portal/issues"
+  },
+  "homepage": "https://github.com/shinvdu/ai-learning-portal#readme",
+  "keywords": [
+    "education",
+    "learning-analytics",
+    "sqlite",
+    "nodejs",
+    "vanilla-js",
+    "svg-charts",
+    "demo"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node scripts/seed.js",
+    "verify": "node scripts/verify.js",
+    "test": "node scripts/verify.js"
+  }
+}

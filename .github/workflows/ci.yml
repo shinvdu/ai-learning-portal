@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify data, content, and server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: echo "No dependencies to install (zero-dependency project)."
+
+      - name: Verify metrics, content, chapters, and assets
+        run: npm run verify
+
+      - name: Syntax check
+        run: |
+          for f in server.js src/*.js scripts/*.js public/js/*.js; do
+            node --check "$f"
+          done
+
+      - name: Server smoke test
+        run: |
+          set -euo pipefail
+          node server.js > /tmp/server.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/api/meta > /tmp/meta.json; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          test -s /tmp/meta.json
+          curl -fsS http://127.0.0.1:8787/ > /dev/null
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Range: bytes=0-99' http://127.0.0.1:8787/assets/course-intro.mp4)
+          test "$status" = "206"
+
+          echo "Smoke test passed: API, index, and video Range requests are working."
