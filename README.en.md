@@ -11,9 +11,15 @@
 
 ![Home](docs/screenshots/home.jpg)
 
+| Dashboard (admin, with playground) | Admin area |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.jpg) | ![Admin](docs/screenshots/admin.jpg) |
+
 A runnable reference implementation of a learning portal: course catalog, course detail, chapter pages, knowledge center, learning dashboard, and data insights. Every KPI is computed from SQLite — edit one record and all numbers and charts update.
 
-> Demo/template project: all data and course content are simulated. No authentication or authorization is included. Do not use it as-is in production.
+> Demo/template project: all data and course content are simulated. Session login and an admin area are included, but there is no email verification, password recovery email, MFA, or audit logging. Do not use it as-is in production.
+
+> Live demo (early deployment, may lag behind `main`): https://77fpveqc.qwenwork.host/
 
 ## Features
 
@@ -23,7 +29,10 @@ A runnable reference implementation of a learning portal: course catalog, course
 - Knowledge center with summaries, key points, glossary, FAQs, and auto-graded quizzes.
 - Learning dashboard: 5 KPIs, 6 hand-written SVG charts, course filter.
 - Data insights generated from the current dataset.
-- Editable data playground: CRUD, CSV import/export, reset to seed data.
+- Registration, login, logout with scrypt password hashing and HttpOnly session cookies.
+- Admin user management: create users, change roles, enable/disable accounts, reset passwords; last admin protection.
+- Admin course management: course metadata, video config, chapter create/edit/delete.
+- Editable data playground (admin only): CRUD, CSV import/export, reset to seed data.
 - Zero npm dependencies, zero build step, works offline.
 - Responsive layout for desktop and mobile.
 
@@ -38,7 +47,15 @@ npm start
 # open http://127.0.0.1:8787
 ```
 
-No `npm install` is needed. On first run, the app creates `data/portal.db` and imports 177 simulated learning records from `data/learning_records.csv`.
+No `npm install` is needed. On first run, the app creates `data/portal.db`, imports 177 simulated learning records, and bootstraps an admin account.
+
+Set the admin credentials explicitly for a predictable login:
+
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
+```
+
+If `ADMIN_PASSWORD` is omitted, a random password is generated and printed once in the startup log. Learners can register from the UI; admins use the “管理后台” link in the header.
 
 LAN demo: `HOST=0.0.0.0 npm start`.
 
@@ -51,7 +68,8 @@ LAN demo: `HOST=0.0.0.0 npm start`.
 | Frontend | Vanilla ES Modules + hash routing | No framework, no build |
 | Charts | Hand-written SVG | No ECharts / CDN |
 | Video | 8-second MP4 generated with ffmpeg | HTTP Range supported |
-| Tests | `scripts/verify.js` | Metrics, content, chapters, assets |
+| Auth | `node:crypto` scrypt + SQLite sessions | HttpOnly / SameSite cookies, zero dependencies |
+| Tests | `scripts/verify.js` | Metrics, content, chapters, assets (temporary DB) |
 
 ## Data and metrics
 
@@ -82,6 +100,15 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 
 | Method | Path | Description |
 |---|---|---|
+| GET | `/api/auth/me` | Current user (null when signed out) |
+| POST | `/api/auth/register` | Register a learner and start a session |
+| POST | `/api/auth/login` | Sign in |
+| POST | `/api/auth/logout` | Sign out |
+| GET / POST | `/api/admin/users` | List / create users (admin) |
+| PATCH | `/api/admin/users/:id` | Role, active flag, password (admin) |
+| GET / POST | `/api/admin/courses` | List / create courses (admin) |
+| PATCH / DELETE | `/api/admin/courses/:id` | Update / delete course (admin) |
+| POST / PATCH / DELETE | `/api/admin/courses/:id/chapters...` | Chapter management (admin) |
 | GET | `/api/meta` | Overview, dataset status |
 | GET | `/api/courses` | Courses with stats |
 | GET | `/api/courses/:id` | Course detail, stats, chapter reach |
@@ -102,30 +129,34 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 | `PORT` | `8787` | Port |
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for LAN) |
 | `PORTAL_DB` | `data/portal.db` | SQLite database path |
+| `ADMIN_EMAIL` | `admin@local.test` | Email for the bootstrapped admin |
+| `ADMIN_PASSWORD` | generated and printed once | Password for the bootstrapped admin |
 
 ## Development
 
 ```bash
 npm run dev      # node --watch
 npm run seed     # restore seed data
-npm run verify   # validate metrics, content, chapters, assets
+npm run verify   # validate metrics, content, chapters, assets (temporary DB)
 npm test
 ```
 
-`verify` and `seed` reset learning records. Use them only in development/CI.
+`verify` uses a temporary database and does not touch `data/portal.db`. `seed` resets learning records only; users and courses are preserved.
 
 ## Security
 
-- No auth. All write endpoints are open to anyone who can reach the server.
-- Use simulated data only.
-- Parameterized SQL, CSV validation, HTML escaping, CSP, 2 MB body limit.
-- For a public deployment, add authentication or a read-only mode first. See [SECURITY.md](SECURITY.md).
+- Demo-grade auth: scrypt password hashing, SQLite sessions, HttpOnly + SameSite=Lax cookies, login/register rate limiting.
+- Role check: record writes and all admin endpoints require an admin session.
+- Bootstrap the admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; the last active admin cannot demote or disable themselves.
+- Same-origin checks on mutating requests, parameterized SQL, CSV validation, HTML escaping, CSP, 2 MB body limit.
+- No email verification, password recovery email, MFA, audit log, or multi-tenancy.
+- Use simulated data only. See [SECURITY.md](SECURITY.md).
 
 ## Project layout
 
 ```text
 server.js            HTTP server and API routes
-src/                 database, analytics, content, CSV
+src/                 database, analytics, auth, content, CSV
 public/              index.html, CSS, vanilla JS, sample video
 data/                seed CSV, lecture texts, SQLite DB (generated)
 scripts/             seed and verification scripts

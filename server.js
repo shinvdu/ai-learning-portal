@@ -2,10 +2,48 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb, getAllRecords, getCourseMeta, getKnowledge, getChapterRows, getChapter, listRecords, addRecord, updateRecord, deleteRecord, replaceRecordsFromCsv, resetRecords, getDatasetMeta, ROOT } from './src/db.js';
+import {
+  openDb,
+  getAllRecords,
+  getCourseMeta,
+  getKnowledge,
+  getChapterRows,
+  getChapter,
+  listRecords,
+  addRecord,
+  updateRecord,
+  deleteRecord,
+  replaceRecordsFromCsv,
+  resetRecords,
+  getDatasetMeta,
+  listUsers,
+  createUser,
+  updateUser,
+  getUserAuthByEmail,
+  touchLogin,
+  createCourse,
+  updateCourse,
+  deleteCourse,
+  addChapter,
+  updateChapter,
+  deleteChapter,
+  ROOT
+} from './src/db.js';
 import { groupEnrollments, summarize, byCourse, buildDashboard, buildInsights, dataQuality, chapterStats } from './src/analytics.js';
 import { toCsv } from './src/csv.js';
 import { PITFALLS, CHAPTER_VIDEO_DEFAULT, CHAPTER_VIDEOS } from './src/content.js';
+import {
+  SESSION_COOKIE,
+  parseCookies,
+  getSessionUser,
+  createSession,
+  destroySession,
+  sessionCookie,
+  clearSessionCookie,
+  verifyPassword,
+  ensureAdminUser,
+  purgeExpiredSessions
+} from './src/auth.js';
 
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const HOST = process.env.HOST || '127.0.0.1';
@@ -35,13 +73,14 @@ const SECURITY_HEADERS = {
     "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 };
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, extraHeaders = {}) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     ...SECURITY_HEADERS,
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    ...extraHeaders
   });
   res.end(body);
 }
@@ -82,6 +121,52 @@ async function readJson(req) {
   } catch {
     throw Object.assign(new Error('请求体不是合法 JSON'), { status: 400 });
   }
+}
+
+function requestContext(db, req) {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE] || '';
+  return { token, user: getSessionUser(db, token) };
+}
+
+function requireAdmin(res, user) {
+  if (!user) {
+    sendJson(res, 401, { error: '请先登录' });
+    return false;
+  }
+  if (user.role !== 'admin') {
+    sendJson(res, 403, { error: '需要管理员权限' });
+    return false;
+  }
+  return true;
+}
+
+function isSameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === String(req.headers.host || '');
+  } catch {
+    return false;
+  }
+}
+
+function isSecureRequest(req) {
+  return req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+}
+
+const authHits = new Map();
+function rateLimited(key, max = 20, windowMs = 10 * 60 * 1000) {
+  const now = Date.now();
+  let bucket = authHits.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    bucket = { count: 0, resetAt: now + windowMs };
+    authHits.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (authHits.size > 2000) {
+    for (const [k, v] of authHits) if (v.resetAt <= now) authHits.delete(k);
+  }
+  return bucket.count > max;
 }
 
 function courseStatsMap(records, enrollments, courses) {
@@ -149,9 +234,159 @@ function insightsPayload(db) {
   };
 }
 
-function apiRoute(db, req, res, url) {
+function adminCoursesPayload(db) {
+  const courses = getCourseMeta(db);
+  const records = getAllRecords(db);
+  const enrollments = groupEnrollments(records);
+  const stats = courseStatsMap(records, enrollments, courses);
+  return {
+    courses: courses.map((c) => ({
+      ...c,
+      stats: stats.get(c.name) ?? null,
+      chapterDetails: getChapterRows(db, c.id)
+    }))
+  };
+}
+
+function apiRoute(db, req, res, url, ctx) {
   const p = url.pathname;
   const q = url.searchParams;
+
+  /* ------------------------------ auth ------------------------------ */
+
+  if (req.method === 'GET' && p === '/api/auth/me') {
+    return sendJson(res, 200, { user: ctx.user });
+  }
+
+  if (req.method === 'POST' && p === '/api/auth/register') {
+    if (rateLimited(`register:${req.socket.remoteAddress}`)) {
+      return sendJson(res, 429, { error: '尝试次数过多，请稍后再试' });
+    }
+    return readJson(req).then((body) => {
+      const result = createUser(db, {
+        name: body.name,
+        email: body.email,
+        password: body.password,
+        role: 'learner',
+        active: true
+      });
+      if (!result.ok) return sendJson(res, 400, { error: result.errors[0], errors: result.errors });
+      const session = createSession(db, result.user.id);
+      return sendJson(res, 201, { user: result.user }, {
+        'Set-Cookie': sessionCookie(session.token, { secure: isSecureRequest(req) })
+      });
+    });
+  }
+
+  if (req.method === 'POST' && p === '/api/auth/login') {
+    if (rateLimited(`login:${req.socket.remoteAddress}`)) {
+      return sendJson(res, 429, { error: '尝试次数过多，请稍后再试' });
+    }
+    return readJson(req).then((body) => {
+      const row = getUserAuthByEmail(db, body.email);
+      if (!row || !row.active || !verifyPassword(body.password, row.password_hash)) {
+        return sendJson(res, 401, { error: '邮箱或密码错误' });
+      }
+      const session = createSession(db, row.id);
+      touchLogin(db, row.id);
+      return sendJson(
+        res,
+        200,
+        { user: { id: row.id, email: row.email, name: row.name, role: row.role, active: true } },
+        { 'Set-Cookie': sessionCookie(session.token, { secure: isSecureRequest(req) }) }
+      );
+    });
+  }
+
+  if (req.method === 'POST' && p === '/api/auth/logout') {
+    destroySession(db, ctx.token);
+    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie() });
+  }
+
+  /* --------------------------- admin gate --------------------------- */
+
+  if (p.startsWith('/api/admin/') && !requireAdmin(res, ctx.user)) return;
+
+  if (req.method === 'GET' && p === '/api/admin/users') {
+    return sendJson(res, 200, { users: listUsers(db) });
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/users') {
+    return readJson(req).then((body) => {
+      const result = createUser(db, {
+        name: body.name,
+        email: body.email,
+        password: body.password,
+        role: body.role === 'admin' ? 'admin' : 'learner',
+        active: body.active !== false
+      });
+      if (!result.ok) return sendJson(res, 400, { error: result.errors[0], errors: result.errors });
+      return sendJson(res, 201, result);
+    });
+  }
+
+  const adminUserMatch = p.match(/^\/api\/admin\/users\/(\d+)$/);
+  if (adminUserMatch && req.method === 'PATCH') {
+    return readJson(req).then((body) => {
+      const result = updateUser(db, Number(adminUserMatch[1]), body, { actingUserId: ctx.user.id });
+      if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+      return sendJson(res, 200, result);
+    });
+  }
+
+  if (req.method === 'GET' && p === '/api/admin/courses') {
+    return sendJson(res, 200, adminCoursesPayload(db));
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/courses') {
+    return readJson(req).then((body) => {
+      const result = createCourse(db, body);
+      if (!result.ok) return sendJson(res, 400, { error: result.errors[0], errors: result.errors });
+      return sendJson(res, 201, result);
+    });
+  }
+
+  const adminCourseMatch = p.match(/^\/api\/admin\/courses\/([^/]+)$/);
+  if (adminCourseMatch && req.method === 'PATCH') {
+    return readJson(req).then((body) => {
+      const result = updateCourse(db, decodeURIComponent(adminCourseMatch[1]), body);
+      if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+      return sendJson(res, 200, result);
+    });
+  }
+  if (adminCourseMatch && req.method === 'DELETE') {
+    const result = deleteCourse(db, decodeURIComponent(adminCourseMatch[1]), { force: q.get('force') === '1' });
+    if (!result.ok) return sendJson(res, result.notFound ? 404 : 409, result);
+    return sendJson(res, 200, result);
+  }
+
+  const adminChapterMatch = p.match(/^\/api\/admin\/courses\/([^/]+)\/chapters\/(\d+)$/);
+  if (adminChapterMatch && req.method === 'PATCH') {
+    return readJson(req).then((body) => {
+      const result = updateChapter(
+        db,
+        decodeURIComponent(adminChapterMatch[1]),
+        Number(adminChapterMatch[2]),
+        body
+      );
+      if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+      return sendJson(res, 200, result);
+    });
+  }
+  if (adminChapterMatch && req.method === 'DELETE') {
+    const result = deleteChapter(db, decodeURIComponent(adminChapterMatch[1]), Number(adminChapterMatch[2]));
+    if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+    return sendJson(res, 200, result);
+  }
+
+  const adminChaptersMatch = p.match(/^\/api\/admin\/courses\/([^/]+)\/chapters$/);
+  if (adminChaptersMatch && req.method === 'POST') {
+    return readJson(req).then((body) => {
+      const result = addChapter(db, decodeURIComponent(adminChaptersMatch[1]), body);
+      if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+      return sendJson(res, 201, result);
+    });
+  }
 
   if (req.method === 'GET' && p === '/api/meta') {
     const records = getAllRecords(db);
@@ -224,10 +459,9 @@ function apiRoute(db, req, res, url) {
     const course = getCourseMeta(db).find((c) => c.id === knowledgeMatch[1]);
     if (!course) return sendJson(res, 404, { error: '课程不存在' });
     const knowledge = getKnowledge(db, course.id);
-    if (!knowledge) return sendJson(res, 404, { error: '该课程暂无知识文档' });
     return sendJson(res, 200, {
       course: { id: course.id, name: course.name, chapters: course.chapters, color: course.color, badge: course.badge },
-      knowledge
+      knowledge: knowledge ?? null
     });
   }
 
@@ -254,6 +488,7 @@ function apiRoute(db, req, res, url) {
   }
 
   if (req.method === 'POST' && p === '/api/records') {
+    if (!requireAdmin(res, ctx.user)) return;
     return readJson(req).then((body) => {
       const result = addRecord(db, body);
       if (!result.ok) return sendJson(res, 400, result);
@@ -263,6 +498,7 @@ function apiRoute(db, req, res, url) {
 
   const recordMatch = p.match(/^\/api\/records\/(\d+)$/);
   if (recordMatch && req.method === 'PATCH') {
+    if (!requireAdmin(res, ctx.user)) return;
     const id = Number(recordMatch[1]);
     return readJson(req).then((body) => {
       if (!body || Object.keys(body).length === 0) return sendJson(res, 400, { error: '没有需要更新的字段' });
@@ -273,12 +509,14 @@ function apiRoute(db, req, res, url) {
   }
 
   if (recordMatch && req.method === 'DELETE') {
+    if (!requireAdmin(res, ctx.user)) return;
     const result = deleteRecord(db, Number(recordMatch[1]));
     if (!result.ok) return sendJson(res, 404, result);
     return sendJson(res, 200, { ok: true, dataset: getDatasetMeta(db) });
   }
 
   if (req.method === 'POST' && p === '/api/records/import') {
+    if (!requireAdmin(res, ctx.user)) return;
     const contentType = String(req.headers['content-type'] || '');
     return readBody(req).then((text) => {
       let csv = text;
@@ -301,6 +539,7 @@ function apiRoute(db, req, res, url) {
   }
 
   if (req.method === 'GET' && p === '/api/export.csv') {
+    if (!requireAdmin(res, ctx.user)) return;
     const csv = toCsv(getAllRecords(db));
     res.writeHead(200, {
       ...SECURITY_HEADERS,
@@ -385,8 +624,12 @@ export function createServer(db) {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
     if (url.pathname.startsWith('/api/')) {
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && !isSameOrigin(req)) {
+        return sendJson(res, 403, { error: '跨站请求被拒绝' });
+      }
+      const ctx = requestContext(db, req);
       Promise.resolve()
-        .then(() => apiRoute(db, req, res, url))
+        .then(() => apiRoute(db, req, res, url, ctx))
         .catch((err) => {
           const status = err.status || 500;
           if (status === 500) console.error('[api]', err);
@@ -405,6 +648,15 @@ export function createServer(db) {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const db = openDb();
+  const admin = ensureAdminUser(db);
+  purgeExpiredSessions(db);
+  if (admin.created && admin.generated) {
+    console.log(`\n  [bootstrap] 已创建管理员账号：${admin.email}`);
+    console.log(`  [bootstrap] 初始密码：${admin.password}`);
+    console.log(`  [bootstrap] 请登录后立即修改密码，或设置 ADMIN_EMAIL / ADMIN_PASSWORD 后重建数据库。\n`);
+  } else if (admin.created) {
+    console.log(`\n  [bootstrap] 已创建管理员账号：${admin.email}（密码来自 ADMIN_PASSWORD）\n`);
+  }
   const server = createServer(db);
   server.listen(PORT, HOST, () => {
     const shownHost = HOST === '0.0.0.0' ? 'localhost' : HOST;

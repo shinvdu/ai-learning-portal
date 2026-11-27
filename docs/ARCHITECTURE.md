@@ -10,11 +10,13 @@ This document describes how AI Learning Portal is put together, how metrics are 
 - Zero npm dependencies and zero build steps.
 - Every number computed from the database, never hardcoded.
 - Clear separation between data, analytics, API, and UI.
+- Demo-grade authentication with learner registration and an admin area for users, courses, and chapters.
 - Works offline (no CDN, no external fonts, no remote video).
 
 **Non-goals**
 
-- Authentication, authorization, multi-tenancy.
+- Production-grade identity: email verification, password-recovery email, MFA, audit logs.
+- Multi-tenancy or fine-grained permissions.
 - Production-grade scale, caching, or background jobs.
 - Real student data.
 - A general-purpose LMS.
@@ -41,13 +43,14 @@ The server is a single process. Static files and the API are served from the sam
 ## Startup sequence
 
 1. `openDb()` creates `data/portal.db` if missing.
-2. Schema is created with `CREATE TABLE IF NOT EXISTS`.
-3. `syncCatalog()` upserts the 5 courses and their knowledge documents.
-4. `syncChapters()` parses `data/lectures/*.txt`, splits by `第 N 章`, and rebuilds the `chapters` table.
+2. Schema is created with `CREATE TABLE IF NOT EXISTS`; lightweight migrations add new columns.
+3. If the `courses` table is empty, `syncCatalog()` imports the initial courses and knowledge documents from `src/content.js`.
+4. `syncChapters()` parses `data/lectures/*.txt` for courses that do not have chapters yet.
 5. If the `records` table is empty, `resetRecords()` imports `data/learning_records.csv`.
-6. `server.js` starts listening on `PORT` / `HOST`.
+6. `ensureAdminUser()` creates one admin account when no active admin exists. `ADMIN_EMAIL` / `ADMIN_PASSWORD` control it; otherwise a random password is generated and printed once.
+7. `server.js` starts listening on `PORT` / `HOST`.
 
-Course and lecture changes require a restart. Record changes do not.
+After the first run, the database is the source of truth for courses, chapters, users, and knowledge documents. Content-only changes in `src/content.js` no longer overwrite admin edits. Course/chapter changes made in the admin UI persist across restarts.
 
 ## Database schema
 
@@ -63,10 +66,11 @@ Course and lecture changes require a restart. Record changes do not.
 | `badge` | TEXT | Short label for cards |
 | `color` | TEXT | Accent color |
 | `intro` | TEXT | Short description |
-| `chapters_json` | TEXT | JSON array of chapter titles |
+| `chapters_json` | TEXT | Legacy seed of chapter titles; live titles come from `chapters` |
+| `video_json` | TEXT | Optional admin-configured video metadata; falls back to `src/content.js` |
 | `sort_order` | INTEGER | Catalog order |
 
-Video metadata is attached at read time from `src/content.js` (see `getCourseMeta`), because it is presentation configuration rather than relational data.
+Course titles are read from the `chapters` table, so admin chapter edits are reflected immediately. Video metadata is `video_json` when set by an admin, otherwise the seed value from `src/content.js`.
 
 ### `records`
 
@@ -101,6 +105,30 @@ Chapters are rebuilt from `data/lectures/*.txt` on every startup.
 |---|---|---|
 | `course_id` | TEXT PK | |
 | `payload_json` | TEXT | Summary, objectives, points, terms, FAQ, quiz, review, original excerpts |
+
+Courses created in the admin UI have no knowledge document; the knowledge center shows an empty state.
+
+### `users`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | |
+| `email` | TEXT UNIQUE COLLATE NOCASE | Normalized to lowercase |
+| `name` | TEXT | Display name |
+| `password_hash` | TEXT | `scrypt$salt$hash` (base64url) |
+| `role` | TEXT | `admin` or `learner` |
+| `active` | INTEGER | 0 disables login and deletes sessions |
+| `created_at` | TEXT | |
+| `last_login_at` | TEXT | |
+
+### `sessions`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | SHA-256 of the random session token |
+| `user_id` | INTEGER | FK to `users` |
+| `expires_at` | INTEGER | Epoch milliseconds, 7 days |
+| `created_at` | TEXT | |
 
 ### `meta`
 
@@ -175,6 +203,19 @@ Consequences:
 - The values are labelled “推断 / inferred” in the UI and must not be presented as raw data.
 - For exact chapter analytics, add `chapter_id` (or a chapter-progress table) to the data source.
 
+## Authentication and authorization
+
+- Passwords: `scryptSync(password, randomSalt, 64)`, stored as `scrypt$salt$hash`; verification uses `timingSafeEqual`.
+- Sessions: 256-bit random token in an `HttpOnly`, `SameSite=Lax`, 7-day cookie (`aip_session`). Only the SHA-256 digest is stored in `sessions`.
+- The cookie adds `Secure` when `X-Forwarded-Proto: https` or the socket is TLS.
+- `GET /api/auth/me` resolves the cookie on every request; expired or inactive-user sessions are deleted.
+- Registration creates an active `learner`. Login and registration are rate-limited per IP (in-memory, fixed window).
+- Mutating requests with a cross-site `Origin` are rejected.
+- Admin bootstrap: when no active admin exists, create one from `ADMIN_EMAIL` / `ADMIN_PASSWORD`, or generate a random password and print it once.
+- Admin constraints: the last active admin cannot be demoted or disabled; an admin cannot demote or disable their own account. Disabling a user deletes their sessions.
+- Authorization: public read APIs need no session; record writes and all `/api/admin/*` routes require `role = admin`.
+- Admin course deletion refuses to remove a course that still has learning records unless `force=1`; force deletes the course and its records in one transaction. Renaming a course updates `records.course_name` in the same transaction.
+
 ## API design
 
 - JSON for all data endpoints; no versioning (demo).
@@ -190,25 +231,25 @@ See the API table in the README for the route list.
 
 - `public/index.html` is a shell: header, nav, `<main>`, footer.
 - `public/js/app.js` contains:
-  - hash router (`#/home`, `#/course/:id`, `#/chapter/:courseId/:idx`, `#/knowledge/:id`, `#/dashboard`, `#/insights`),
+  - hash router (`#/home`, `#/course/:id`, `#/chapter/:courseId/:idx`, `#/knowledge/:id`, `#/dashboard`, `#/insights`, `#/login`, `#/register`, `#/admin`, `#/admin/course/:id`),
   - view renderers using template strings,
   - quiz state and scoring,
-  - the editable data playground.
+  - the admin user/course/chapter editors,
+  - the admin-only data playground.
 - `public/js/charts.js` generates SVG for column, horizontal bar, and line charts. `compact` mode switches to a smaller viewBox and fewer labels on narrow screens.
 - All dynamic content is escaped with a small `esc()` helper before insertion.
 
 ### Why a hash router instead of a framework
 
-Six views (five modules plus chapter pages), no shared complex state, no build step. Hash routing keeps deployment trivial and makes the demo work from any static host for the read-only views. A framework becomes worthwhile when authentication, complex forms, or many reusable components are added.
+Six public views plus login, registration, and an admin area, with no build step. Hash routing keeps deployment trivial. The current state is still small enough for vanilla modules; a framework becomes worthwhile when the admin area grows many reusable forms, tables, and permission variants.
 
 ## Extending
 
 ### Add a course
 
-1. Add an entry to `COURSES` in `src/content.js` (including `lectureFile`).
-2. Add `data/lectures/<lectureFile>` with `第 1 章`, `第 2 章`, … headings.
-3. Add a `KNOWLEDGE` entry.
-4. Restart. The catalog and chapters are synced; add CSV rows for learning data.
+**Through the admin UI (recommended):** sign in as an admin → 管理后台 → 新建课程. Add chapters in the course editor. New courses have no knowledge document until one is added in code/database.
+
+**As seed content for a fresh database:** add an entry to `COURSES` in `src/content.js` (including `lectureFile`), add `data/lectures/<lectureFile>` with `第 1 章`, `第 2 章`, … headings, and add a `KNOWLEDGE` entry. This only imports when the `courses` table is empty; existing databases are not overwritten.
 
 ### Replace a video
 
@@ -225,7 +266,7 @@ Six views (five modules plus chapter pages), no shared complex state, no build s
 
 ## Testing
 
-`npm run verify` resets the seed data and checks:
+`npm run verify` creates a temporary SQLite database (it does not touch `data/portal.db`) and checks:
 
 - overall and per-course reference values,
 - knowledge completeness and quiz validity,
@@ -237,14 +278,13 @@ CI additionally syntax-checks ES modules and performs a server smoke test.
 
 ## Security model
 
-This is a demo:
+This is a demo with basic, self-contained authentication:
 
-- no authentication,
-- open write endpoints,
+- scrypt password hashes, hashed session tokens, HttpOnly/SameSite cookies,
+- admin/learner roles; record writes and admin routes require admin,
+- rate limiting on login/register, same-origin checks on mutations,
 - simulated data only,
-- CSP disallows inline scripts,
-- all dynamic text is escaped,
-- SQL is parameterized,
-- imports are validated and transactional.
+- CSP disallows inline scripts; dynamic text is escaped,
+- SQL is parameterized; CSV imports are validated and transactional.
 
-For a public deployment, add a read-only mode, authentication, rate limiting, and HTTPS termination at a reverse proxy.
+It intentionally lacks email verification, password recovery email, MFA, audit logging, and multi-tenancy. For a public deployment, add those plus HTTPS and proxy-level rate limiting.

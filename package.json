@@ -1,7 +1,7 @@
 {
   "name": "ai-learning-portal",
-  "version": "1.0.0",
-  "description": "A zero-dependency Node.js + SQLite demo portal for courses, knowledge bases, and learning analytics.",
+  "version": "1.1.0",
+  "description": "A zero-dependency Node.js + SQLite learning portal demo with courses, analytics, auth, and an admin area.",
   "type": "module",
   "license": "MIT",
   "author": "AI Learning Portal contributors",

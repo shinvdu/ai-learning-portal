@@ -17,6 +17,8 @@ const sourceLabel = (s) =>
 
 const isCompact = () => window.matchMedia('(max-width: 720px)').matches;
 
+let currentUser = null;
+
 function fmtTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -44,6 +46,8 @@ async function api(path, { method = 'GET', body, headers = {} } = {}) {
   }
   return data;
 }
+
+const apiError = (err) => err?.payload?.error || err?.payload?.errors?.join('；') || err?.message || '操作失败';
 
 let toastTimer = null;
 function showToast(message, kind = 'ok') {
@@ -75,6 +79,31 @@ function setNav(name) {
   });
 }
 
+function renderUserArea() {
+  const el = document.querySelector('#userArea');
+  if (!el) return;
+  if (currentUser) {
+    el.innerHTML = `
+      ${currentUser.role === 'admin' ? '<a class="user-admin" href="#/admin">管理后台</a>' : ''}
+      <span class="user-name" title="${esc(currentUser.email)}">${esc(currentUser.name)}</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="logoutBtn">退出</button>`;
+    el.querySelector('#logoutBtn').addEventListener('click', async () => {
+      try {
+        await api('/api/auth/logout', { method: 'POST' });
+      } catch {
+        /* ignore */
+      }
+      currentUser = null;
+      renderUserArea();
+      showToast('已退出登录');
+      if (parseHash().path.startsWith('/admin')) location.hash = '#/home';
+      else render();
+    });
+  } else {
+    el.innerHTML = `<a class="user-link" href="#/login">登录</a><a class="btn btn-light btn-sm" href="#/register">注册</a>`;
+  }
+}
+
 function parseHash() {
   const raw = location.hash.replace(/^#/, '') || '/home';
   const [pathPart, queryPart] = raw.split('?');
@@ -87,7 +116,11 @@ const routes = [
   { re: /^\/chapter\/([A-Za-z0-9_-]+)\/(\d+)$/, nav: 'home', view: viewChapter },
   { re: /^\/knowledge(?:\/([A-Za-z0-9_-]+))?$/, nav: 'knowledge', view: viewKnowledge },
   { re: /^\/dashboard\/?$/, nav: 'dashboard', view: viewDashboard },
-  { re: /^\/insights\/?$/, nav: 'insights', view: viewInsights }
+  { re: /^\/insights\/?$/, nav: 'insights', view: viewInsights },
+  { re: /^\/login\/?$/, nav: '', view: viewLogin },
+  { re: /^\/register\/?$/, nav: '', view: viewRegister },
+  { re: /^\/admin\/?$/, nav: 'admin', view: viewAdmin },
+  { re: /^\/admin\/course\/([A-Za-z0-9_-]+)$/, nav: 'admin', view: viewAdminCourse }
 ];
 
 async function render() {
@@ -327,33 +360,41 @@ async function viewCourse(args) {
     <div class="detail-grid">
       <section class="panel" aria-labelledby="chaptersTitle" style="--accent:${esc(course.color)}">
         <h2 id="chaptersTitle">章节目录</h2>
-        <p class="panel-sub">章节正文来自讲义原文；每章都配置统一示例视频；到达率按“完成章节总数”推断，假设按顺序学习。</p>
-        <ol class="chapter-list">
-          ${chapterRows
-            .map(
-              (ch) => `<li>
-                <a class="chapter-row" href="#/chapter/${esc(course.id)}/${ch.idx}">
-                  <span class="chapter-no">${String(ch.idx).padStart(2, '0')}</span>
-                  <div class="chapter-info">
-                    <h3>${esc(ch.title)} <span class="video-inline">▶ 视频</span></h3>
-                    <p class="chapter-sub">讲义第 ${ch.idx} 章${
-                      ch.total ? ` · ${ch.reached}/${ch.total} 人到达（${pct(ch.reachRate)}）` : ''
-                    }</p>
-                    ${
-                      ch.total
-                        ? `<span class="chapter-meter" aria-hidden="true"><span style="width:${Math.max(
-                            0,
-                            Math.min(100, Number(ch.reachRate) || 0)
-                          )}%"></span></span>`
-                        : ''
-                    }
-                  </div>
-                  <span class="chapter-go">查看章节 <span aria-hidden="true">→</span></span>
-                </a>
-              </li>`
-            )
-            .join('')}
-        </ol>
+        <p class="panel-sub">章节正文来自讲义或后台编辑；每章都配置统一示例视频；到达率按“完成章节总数”推断，假设按顺序学习。</p>
+        ${
+          chapterRows.length
+            ? `<ol class="chapter-list">
+                ${chapterRows
+                  .map(
+                    (ch) => `<li>
+                      <a class="chapter-row" href="#/chapter/${esc(course.id)}/${ch.idx}">
+                        <span class="chapter-no">${String(ch.idx).padStart(2, '0')}</span>
+                        <div class="chapter-info">
+                          <h3>${esc(ch.title)} <span class="video-inline">▶ 视频</span></h3>
+                          <p class="chapter-sub">第 ${ch.idx} 章${
+                            ch.total ? ` · ${ch.reached}/${ch.total} 人到达（${pct(ch.reachRate)}）` : ''
+                          }</p>
+                          ${
+                            ch.total
+                              ? `<span class="chapter-meter" aria-hidden="true"><span style="width:${Math.max(
+                                  0,
+                                  Math.min(100, Number(ch.reachRate) || 0)
+                                )}%"></span></span>`
+                              : ''
+                          }
+                        </div>
+                        <span class="chapter-go">查看章节 <span aria-hidden="true">→</span></span>
+                      </a>
+                    </li>`
+                  )
+                  .join('')}
+              </ol>`
+            : '<div class="empty-state"><p>本课程还没有章节。</p>' +
+              (currentUser?.role === 'admin'
+                ? `<a class="btn btn-ghost btn-sm" href="#/admin/course/${esc(course.id)}">去后台添加章节</a>`
+                : '') +
+              '</div>'
+        }
       </section>
 
       <aside class="panel side-panel" aria-labelledby="progressTitle">
@@ -673,6 +714,40 @@ async function viewKnowledge(args) {
   const id = args[0] || 'C1';
   const [catalog, doc] = await Promise.all([api('/api/courses'), api(`/api/knowledge/${encodeURIComponent(id)}`)]);
   const k = doc.knowledge;
+
+  if (!k) {
+    app.innerHTML = `
+      <nav class="crumbs" aria-label="面包屑">
+        <a href="#/home">课程广场</a><span aria-hidden="true">/</span><span>知识中心</span><span aria-hidden="true">/</span><span>${esc(
+          doc.course.name
+        )}</span>
+      </nav>
+      <header class="page-head knowledge-head">
+        <div>
+          <span class="eyebrow">知识中心</span>
+          <h1>${esc(doc.course.name)}</h1>
+          <p>该课程暂时没有知识文档。</p>
+        </div>
+        <div class="tabs" role="tablist" aria-label="选择课程">
+          ${catalog.courses
+            .map(
+              (c) => `<a role="tab" aria-selected="${c.id === id}" class="tab${c.id === id ? ' active' : ''}" href="#/knowledge/${esc(
+                c.id
+              )}">${esc(c.name)}</a>`
+            )
+            .join('')}
+        </div>
+      </header>
+      <section class="panel empty-state">
+        <h2>暂无知识文档</h2>
+        <p>后台新建的课程默认没有知识文档。可以先查看课程详情与章节，或补充知识内容后再启用知识中心。</p>
+        <div class="form-actions">
+          <a class="btn btn-primary" href="#/course/${esc(doc.course.id)}">查看课程详情</a>
+          ${currentUser?.role === 'admin' ? '<a class="btn btn-ghost" href="#/admin">管理后台</a>' : ''}
+        </div>
+      </section>`;
+    return;
+  }
 
   app.innerHTML = `
     <nav class="crumbs" aria-label="面包屑">
@@ -1244,7 +1319,11 @@ async function viewDashboard(args, params) {
       </div>
     </header>
     <div id="dashBody">${loadingBlock('正在计算指标…')}</div>
-    ${demoPanelHtml(d.courseCatalog ?? [])}`;
+    ${
+      currentUser?.role === 'admin'
+        ? demoPanelHtml(d.courseCatalog ?? [])
+        : `<p class="footnote">数据演示面板仅对管理员开放。<a href="#/login">登录管理员账号</a>后可编辑学习记录、导入 CSV 或恢复初始数据。</p>`
+    }`;
 
   let currentFilter = filter;
 
@@ -1269,7 +1348,9 @@ async function viewDashboard(args, params) {
     showToast('指标已刷新');
   });
 
-  bindDemoPanel({ refreshDashboard, catalog: d.courseCatalog ?? [] });
+  if (currentUser?.role === 'admin') {
+    bindDemoPanel({ refreshDashboard, catalog: d.courseCatalog ?? [] });
+  }
 }
 
 /* ============================== 数据洞察 ============================== */
@@ -1389,9 +1470,590 @@ async function viewInsights() {
   refreshMeta();
 }
 
+/* ============================== 认证 ============================== */
+
+function authPage({ register = false } = {}) {
+  if (currentUser) {
+    location.hash = currentUser.role === 'admin' ? '#/admin' : '#/home';
+    return;
+  }
+  const title = register ? '创建账号' : '登录';
+  const subtitle = register
+    ? '注册后即可浏览课程；管理员可在后台管理用户与课程。'
+    : '登录后可使用数据演示与管理后台。';
+  app.innerHTML = `
+    <section class="auth-page">
+      <div class="panel auth-card">
+        <span class="eyebrow">AI LEARNING PORTAL</span>
+        <h1>${title}</h1>
+        <p class="auth-sub">${subtitle}</p>
+        <form id="authForm" class="auth-form">
+          ${
+            register
+              ? `<label>姓名<input name="name" required maxlength="60" autocomplete="name" placeholder="你的名字"></label>`
+              : ''
+          }
+          <label>邮箱<input name="email" type="email" required maxlength="160" autocomplete="email" placeholder="you@example.com"></label>
+          <label>密码<input name="password" type="password" required minlength="8" autocomplete="${
+            register ? 'new-password' : 'current-password'
+          }" placeholder="至少 8 个字符"></label>
+          ${
+            register
+              ? `<label>确认密码<input name="confirm" type="password" required minlength="8" autocomplete="new-password" placeholder="再次输入密码"></label>`
+              : ''
+          }
+          <div class="form-error" id="authError" role="alert" hidden></div>
+          <button type="submit" class="btn btn-primary btn-block">${register ? '注册并登录' : '登录'}</button>
+        </form>
+        <p class="auth-alt">${
+          register
+            ? '已有账号？<a href="#/login">直接登录</a>'
+            : '还没有账号？<a href="#/register">注册一个</a>'
+        }</p>
+      </div>
+      <aside class="auth-aside">
+        <h2>普通用户</h2>
+        <ul>
+          <li>浏览课程、章节、知识中心与学习看板</li>
+          <li>完成知识中心测验</li>
+        </ul>
+        <h2>管理员</h2>
+        <ul>
+          <li>用户管理：角色、启停、创建账号</li>
+          <li>课程管理：课程信息、章节、视频</li>
+          <li>编辑学习记录、导入/导出 CSV、恢复初始数据</li>
+        </ul>
+        <p class="side-note">管理员账号由部署环境初始化；如忘记密码，可在服务器日志或数据库中重置。</p>
+      </aside>
+    </section>`;
+
+  const form = document.querySelector('#authForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#authError');
+    errorBox.hidden = true;
+    const f = form.elements;
+    const password = f.password.value;
+    if (register && password !== f.confirm.value) {
+      errorBox.hidden = false;
+      errorBox.textContent = '两次输入的密码不一致';
+      return;
+    }
+    const body = register
+      ? { name: f.name.value.trim(), email: f.email.value.trim(), password }
+      : { email: f.email.value.trim(), password };
+    try {
+      const res = await api(register ? '/api/auth/register' : '/api/auth/login', { method: 'POST', body });
+      currentUser = res.user;
+      renderUserArea();
+      showToast(register ? '注册成功' : `欢迎回来，${res.user.name}`);
+      location.hash = res.user.role === 'admin' ? '#/admin' : '#/home';
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+}
+
+async function viewLogin() {
+  authPage({ register: false });
+}
+
+async function viewRegister() {
+  authPage({ register: true });
+}
+
+function adminGate() {
+  if (currentUser?.role === 'admin') return true;
+  app.innerHTML = `<div class="panel auth-gate">
+    <span class="eyebrow">管理后台</span>
+    <h1>${currentUser ? '需要管理员权限' : '请先登录'}</h1>
+    <p>${currentUser ? '当前账号是普通用户，无法访问用户与课程管理。' : '登录管理员账号后即可管理用户、课程与数据。'}</p>
+    <a class="btn btn-primary" href="${currentUser ? '#/home' : '#/login'}">${currentUser ? '返回首页' : '去登录'}</a>
+  </div>`;
+  return false;
+}
+
+function closeDialog(dialog) {
+  dialog?.close();
+}
+
+function bindDialogClose(dialog) {
+  dialog?.querySelectorAll('[data-close]').forEach((btn) => btn.addEventListener('click', () => dialog.close()));
+  dialog?.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+}
+
+/* ============================== 管理后台 ============================== */
+
+async function viewAdmin() {
+  if (!adminGate()) return;
+  const [usersData, coursesData] = await Promise.all([api('/api/admin/users'), api('/api/admin/courses')]);
+  const users = usersData.users ?? [];
+  const courses = coursesData.courses ?? [];
+
+  app.innerHTML = `
+    <header class="page-head">
+      <div>
+        <span class="eyebrow">ADMIN · 管理后台</span>
+        <h1>用户与课程管理</h1>
+        <p>管理员可以创建用户、调整角色与状态，并维护课程元数据、章节与视频。</p>
+      </div>
+      <div class="admin-head-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="addUserBtn">＋ 新增用户</button>
+        <a class="btn btn-ghost btn-sm" href="#/admin/course/new">＋ 新建课程</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>用户</h2><p class="panel-sub">共 ${users.length} 个账号；停用用户会立即失效其会话。</p></div>
+        <span class="tag">${users.filter((u) => u.role === 'admin').length} 个管理员</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="usersTable">
+          <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody>
+            ${users
+              .map(
+                (u) => `<tr>
+                  <td><strong>${esc(u.name)}</strong><div class="muted">${esc(u.email)}</div></td>
+                  <td><select data-user-role="${u.id}" aria-label="用户角色" ${u.id === currentUser.id ? 'disabled' : ''}>
+                    <option value="learner"${u.role === 'learner' ? ' selected' : ''}>学员</option>
+                    <option value="admin"${u.role === 'admin' ? ' selected' : ''}>管理员</option>
+                  </select></td>
+                  <td>
+                    <span class="status-pill ${u.active ? 'ok' : 'off'}">${u.active ? '启用' : '停用'}</span>
+                    <button type="button" class="btn-link" data-user-active="${u.id}" data-active="${u.active}" ${
+                      u.id === currentUser.id ? 'disabled' : ''
+                    }>${u.active ? '停用' : '启用'}</button>
+                  </td>
+                  <td class="muted">${esc(u.last_login_at ?? '—')}</td>
+                  <td class="muted">${esc(u.created_at ?? '—')}</td>
+                  <td><button type="button" class="btn-link" data-user-password="${u.id}" data-user-name="${esc(
+                    u.name
+                  )}">改密码</button></td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>课程</h2><p class="panel-sub">课程名称变更会自动同步学习记录；删除有记录的课程需要二次确认。</p></div>
+        <span class="tag">${courses.length} 门课程</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="coursesTable">
+          <thead><tr><th>课程</th><th>讲师 / 难度</th><th>章节</th><th>学习人数</th><th>操作</th></tr></thead>
+          <tbody>
+            ${courses
+              .map(
+                (c) => `<tr>
+                  <td><strong>${esc(c.name)}</strong><div class="muted">${esc(c.id)} · ${esc(c.category)}</div></td>
+                  <td>${esc(c.teacher)} <span class="muted">/ ${esc(c.level)}</span></td>
+                  <td>${c.chapters.length}</td>
+                  <td>${num(c.stats?.learners ?? 0)}</td>
+                  <td class="actions">
+                    <a class="btn-link" href="#/admin/course/${esc(c.id)}">编辑</a>
+                    <button type="button" class="btn-link danger-text" data-course-delete="${esc(c.id)}">删除</button>
+                  </td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <dialog id="userDialog" class="record-dialog" aria-labelledby="userDialogTitle">
+      <form id="userForm">
+        <header class="dialog-head">
+          <h2 id="userDialogTitle">新增用户</h2>
+          <button type="button" class="icon-btn" data-close aria-label="关闭">✕</button>
+        </header>
+        <div class="form-grid">
+          <label>姓名<input name="name" required maxlength="60"></label>
+          <label>邮箱<input name="email" type="email" required maxlength="160"></label>
+          <label>初始密码<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label>角色<select name="role"><option value="learner">学员</option><option value="admin">管理员</option></select></label>
+        </div>
+        <div class="form-error" id="userFormError" role="alert" hidden></div>
+        <footer class="dialog-foot">
+          <button type="button" class="btn btn-ghost" data-close>取消</button>
+          <button type="submit" class="btn btn-primary">创建用户</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="passwordDialog" class="record-dialog" aria-labelledby="passwordDialogTitle">
+      <form id="passwordForm">
+        <header class="dialog-head">
+          <h2 id="passwordDialogTitle">修改密码</h2>
+          <button type="button" class="icon-btn" data-close aria-label="关闭">✕</button>
+        </header>
+        <input type="hidden" name="id">
+        <div class="form-grid">
+          <label class="span-2">新密码<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        </div>
+        <div class="form-error" id="passwordFormError" role="alert" hidden></div>
+        <footer class="dialog-foot">
+          <button type="button" class="btn btn-ghost" data-close>取消</button>
+          <button type="submit" class="btn btn-primary">更新密码</button>
+        </footer>
+      </form>
+    </dialog>`;
+
+  const userDialog = document.querySelector('#userDialog');
+  bindDialogClose(userDialog);
+  document.querySelector('#addUserBtn').addEventListener('click', () => {
+    const form = document.querySelector('#userForm');
+    form.reset();
+    document.querySelector('#userFormError').hidden = true;
+    userDialog.showModal();
+  });
+
+  document.querySelector('#userForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errorBox = document.querySelector('#userFormError');
+    errorBox.hidden = true;
+    try {
+      await api('/api/admin/users', {
+        method: 'POST',
+        body: {
+          name: form.elements.name.value.trim(),
+          email: form.elements.email.value.trim(),
+          password: form.elements.password.value,
+          role: form.elements.role.value
+        }
+      });
+      userDialog.close();
+      showToast('用户已创建');
+      await viewAdmin();
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+
+  const passwordDialog = document.querySelector('#passwordDialog');
+  const passwordForm = document.querySelector('#passwordForm');
+  bindDialogClose(passwordDialog);
+  passwordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#passwordFormError');
+    errorBox.hidden = true;
+    try {
+      await api(`/api/admin/users/${passwordForm.elements.id.value}`, {
+        method: 'PATCH',
+        body: { password: passwordForm.elements.password.value }
+      });
+      passwordDialog.close();
+      showToast('密码已更新');
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+
+  document.querySelector('#usersTable').addEventListener('change', async (e) => {
+    const select = e.target.closest('[data-user-role]');
+    if (!select) return;
+    try {
+      await api(`/api/admin/users/${select.dataset.userRole}`, { method: 'PATCH', body: { role: select.value } });
+      showToast('角色已更新');
+    } catch (err) {
+      showToast(apiError(err), 'err');
+    }
+    await viewAdmin();
+  });
+
+  document.querySelector('#usersTable').addEventListener('click', async (e) => {
+    const pwd = e.target.closest('[data-user-password]');
+    if (pwd) {
+      passwordForm.reset();
+      document.querySelector('#passwordFormError').hidden = true;
+      passwordForm.elements.id.value = pwd.dataset.userPassword;
+      document.querySelector('#passwordDialogTitle').textContent = `修改密码 · ${pwd.dataset.userName}`;
+      passwordDialog.showModal();
+      return;
+    }
+    const toggle = e.target.closest('[data-user-active]');
+    if (!toggle) return;
+    try {
+      await api(`/api/admin/users/${toggle.dataset.userActive}`, {
+        method: 'PATCH',
+        body: { active: toggle.dataset.active !== 'true' }
+      });
+      showToast('用户状态已更新');
+    } catch (err) {
+      showToast(apiError(err), 'err');
+    }
+    await viewAdmin();
+  });
+
+  document.querySelector('#coursesTable').addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-course-delete]');
+    if (!del) return;
+    const course = courses.find((c) => c.id === del.dataset.courseDelete);
+    if (course) await deleteCourseFlow(course, async () => viewAdmin());
+  });
+}
+
+async function deleteCourseFlow(course, reload) {
+  if (!confirm(`确定删除课程「${course.name}」？`)) return;
+  try {
+    await api(`/api/admin/courses/${course.id}`, { method: 'DELETE' });
+    showToast('课程已删除');
+  } catch (err) {
+    if (err.payload?.conflict) {
+      if (!confirm(`该课程还有 ${err.payload.records} 条学习记录。继续删除会同时删除这些记录，确定吗？`)) return;
+      try {
+        await api(`/api/admin/courses/${course.id}?force=1`, { method: 'DELETE' });
+        showToast('课程及其学习记录已删除');
+      } catch (err2) {
+        showToast(apiError(err2), 'err');
+      }
+    } else {
+      showToast(apiError(err), 'err');
+    }
+  }
+  await reload();
+}
+
+async function viewAdminCourse(args) {
+  if (!adminGate()) return;
+  const id = args[0];
+  const isNew = id === 'new';
+  const data = await api('/api/admin/courses');
+  const course = isNew ? null : data.courses.find((c) => c.id === id);
+  if (!isNew && !course) {
+    app.innerHTML = `<div class="panel auth-gate"><h1>课程不存在</h1><a class="btn btn-primary" href="#/admin">返回管理后台</a></div>`;
+    return;
+  }
+  const video = course?.video ?? {};
+  const chapters = course?.chapterDetails ?? [];
+
+  app.innerHTML = `
+    <nav class="crumbs"><a href="#/admin">管理后台</a><span>/</span><span>${isNew ? '新建课程' : esc(course.name)}</span></nav>
+    <header class="page-head">
+      <div>
+        <span class="eyebrow">ADMIN · 课程</span>
+        <h1>${isNew ? '新建课程' : esc(course.name)}</h1>
+        <p>${isNew ? '保存后即可添加章节；新课程默认没有知识文档。' : '修改会立即反映到课程详情、章节页与学习看板。'}</p>
+      </div>
+      <div class="admin-head-actions">
+        <a class="btn btn-ghost btn-sm" href="#/admin">← 返回列表</a>
+        ${!isNew ? `<a class="btn btn-ghost btn-sm" href="#/course/${esc(course.id)}">查看课程页</a>` : ''}
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>课程信息</h2>
+      <form id="courseForm" class="admin-form">
+        <div class="form-grid">
+          <label>课程名称<input name="name" required maxlength="80" value="${esc(course?.name ?? '')}"></label>
+          <label>分类<input name="category" maxlength="40" value="${esc(course?.category ?? '')}"></label>
+          <label>讲师<input name="teacher" maxlength="40" value="${esc(course?.teacher ?? '')}"></label>
+          <label>难度<input name="level" maxlength="40" value="${esc(course?.level ?? '入门')}"></label>
+          <label>短标签<input name="badge" maxlength="8" value="${esc(course?.badge ?? '')}"></label>
+          <label>主题色<input name="color" type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(course?.color ?? '') ? course.color : '#2F78C4')}"></label>
+          <label>排序<input name="sort_order" type="number" step="1" value="${Number(course?.sort_order ?? 0)}"></label>
+          <label class="span-2">简介<textarea name="intro" rows="3" maxlength="500">${esc(course?.intro ?? '')}</textarea></label>
+        </div>
+        <h3>课程视频</h3>
+        <div class="form-grid">
+          <label>视频地址<input name="video_src" maxlength="500" placeholder="/assets/course-intro.mp4" value="${esc(video.src ?? '')}"></label>
+          <label>封面地址<input name="video_poster" maxlength="500" placeholder="/assets/course-intro-poster.jpg" value="${esc(video.poster ?? '')}"></label>
+          <label>时长文本<input name="video_duration" maxlength="40" value="${esc(video.durationText ?? '8 秒')}"></label>
+        </div>
+        <div class="form-error" id="courseFormError" role="alert" hidden></div>
+        <div class="form-actions">
+          ${!isNew ? `<button type="button" class="btn btn-danger-ghost" id="deleteCourseBtn">删除课程</button>` : ''}
+          <button type="submit" class="btn btn-primary">${isNew ? '创建课程' : '保存修改'}</button>
+        </div>
+      </form>
+    </section>
+
+    ${
+      !isNew
+        ? `<section class="panel">
+            <div class="panel-head">
+              <div><h2>章节管理</h2><p class="panel-sub">章节正文支持多段文本；删除章节会保留编号空位。</p></div>
+              <button type="button" class="btn btn-primary btn-sm" id="addChapterBtn">＋ 新增章节</button>
+            </div>
+            <ul class="admin-chapter-list">
+              ${
+                chapters.length
+                  ? chapters
+                      .map(
+                        (ch) => `<li>
+                          <span class="chapter-no">${String(ch.idx).padStart(2, '0')}</span>
+                          <div class="chapter-info">
+                            <h3>${esc(ch.title)}</h3>
+                            <p class="chapter-sub">${esc(ch.body.slice(0, 90))}${ch.body.length > 90 ? '…' : ''}</p>
+                          </div>
+                          <div class="actions">
+                            <button type="button" class="btn-link" data-chapter-edit="${ch.idx}">编辑</button>
+                            <button type="button" class="btn-link danger-text" data-chapter-delete="${ch.idx}">删除</button>
+                          </div>
+                        </li>`
+                      )
+                      .join('')
+                  : '<li class="muted">暂无章节，点击右上角新增。</li>'
+              }
+            </ul>
+          </section>`
+        : ''
+    }
+
+    <dialog id="chapterDialog" class="record-dialog" aria-labelledby="chapterDialogTitle">
+      <form id="chapterForm">
+        <header class="dialog-head">
+          <h2 id="chapterDialogTitle">新增章节</h2>
+          <button type="button" class="icon-btn" data-close aria-label="关闭">✕</button>
+        </header>
+        <input type="hidden" name="idx">
+        <div class="form-grid">
+          <label class="span-2">标题<input name="title" required maxlength="160"></label>
+          <label class="span-2">正文<textarea name="body" rows="10" required maxlength="50000" placeholder="支持多段文本，空行分段"></textarea></label>
+        </div>
+        <div class="form-error" id="chapterFormError" role="alert" hidden></div>
+        <footer class="dialog-foot">
+          <button type="button" class="btn btn-ghost" data-close>取消</button>
+          <button type="submit" class="btn btn-primary">保存章节</button>
+        </footer>
+      </form>
+    </dialog>`;
+
+  document.querySelector('#courseForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errorBox = document.querySelector('#courseFormError');
+    errorBox.hidden = true;
+    const videoSrc = form.elements.video_src.value.trim();
+    const payload = {
+      name: form.elements.name.value.trim(),
+      category: form.elements.category.value.trim(),
+      teacher: form.elements.teacher.value.trim(),
+      level: form.elements.level.value.trim(),
+      badge: form.elements.badge.value.trim(),
+      color: form.elements.color.value,
+      sort_order: Number(form.elements.sort_order.value),
+      intro: form.elements.intro.value.trim(),
+      video: videoSrc
+        ? {
+            src: videoSrc,
+            poster: form.elements.video_poster.value.trim(),
+            durationText: form.elements.video_duration.value.trim()
+          }
+        : null
+    };
+    try {
+      if (isNew) {
+        const res = await api('/api/admin/courses', { method: 'POST', body: payload });
+        showToast('课程已创建，可以继续添加章节');
+        location.hash = `#/admin/course/${res.course.id}`;
+      } else {
+        await api(`/api/admin/courses/${course.id}`, { method: 'PATCH', body: payload });
+        showToast('课程信息已保存');
+        await viewAdminCourse([course.id]);
+      }
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+
+  document.querySelector('#deleteCourseBtn')?.addEventListener('click', async () => {
+    await deleteCourseFlow(course, async () => {
+      location.hash = '#/admin';
+    });
+  });
+
+  if (isNew) return;
+
+  const chapterDialog = document.querySelector('#chapterDialog');
+  bindDialogClose(chapterDialog);
+  const chapterForm = document.querySelector('#chapterForm');
+  const chapterError = document.querySelector('#chapterFormError');
+  const openChapter = (chapter) => {
+    chapterForm.reset();
+    chapterError.hidden = true;
+    chapterForm.elements.idx.value = chapter?.idx ?? '';
+    chapterForm.elements.title.value = chapter?.title ?? '';
+    chapterForm.elements.body.value = chapter?.body ?? '';
+    document.querySelector('#chapterDialogTitle').textContent = chapter ? `编辑第 ${chapter.idx} 章` : '新增章节';
+    chapterDialog.showModal();
+  };
+  document.querySelector('#addChapterBtn').addEventListener('click', () => openChapter(null));
+
+  chapterForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    chapterError.hidden = true;
+    const idx = chapterForm.elements.idx.value;
+    try {
+      if (idx) {
+        await api(`/api/admin/courses/${course.id}/chapters/${idx}`, {
+          method: 'PATCH',
+          body: { title: chapterForm.elements.title.value.trim(), body: chapterForm.elements.body.value.trim() }
+        });
+        showToast('章节已更新');
+      } else {
+        await api(`/api/admin/courses/${course.id}/chapters`, {
+          method: 'POST',
+          body: { title: chapterForm.elements.title.value.trim(), body: chapterForm.elements.body.value.trim() }
+        });
+        showToast('章节已新增');
+      }
+      chapterDialog.close();
+      await viewAdminCourse([course.id]);
+    } catch (err) {
+      chapterError.hidden = false;
+      chapterError.textContent = apiError(err);
+    }
+  });
+
+  document.querySelector('.admin-chapter-list').addEventListener('click', async (e) => {
+    const edit = e.target.closest('[data-chapter-edit]');
+    const del = e.target.closest('[data-chapter-delete]');
+    if (edit) {
+      const ch = chapters.find((c) => String(c.idx) === edit.dataset.chapterEdit);
+      if (ch) openChapter(ch);
+    }
+    if (del) {
+      const idx = del.dataset.chapterDelete;
+      if (!confirm(`确定删除第 ${idx} 章？`)) return;
+      try {
+        await api(`/api/admin/courses/${course.id}/chapters/${idx}`, { method: 'DELETE' });
+        showToast('章节已删除');
+        await viewAdminCourse([course.id]);
+      } catch (err) {
+        showToast(apiError(err), 'err');
+      }
+    }
+  });
+}
+
 /* ============================== 启动 ============================== */
 
-if (!location.hash) history.replaceState(null, '', '#/home');
-window.addEventListener('hashchange', render);
-refreshMeta();
-render();
+async function boot() {
+  try {
+    const me = await api('/api/auth/me');
+    currentUser = me.user;
+  } catch {
+    currentUser = null;
+  }
+  renderUserArea();
+  refreshMeta();
+  if (!location.hash) history.replaceState(null, '', '#/home');
+  window.addEventListener('hashchange', render);
+  render();
+}
+
+boot();

@@ -11,9 +11,11 @@
 
 ![AI Learning Portal 首页](docs/screenshots/home.jpg)
 
-覆盖 **课程广场、课程详情、知识中心、学习看板、数据洞察** 五个模块，并额外提供章节页与可编辑的数据演示面板。所有 KPI 都由 SQLite 中的原始学习记录计算——改一条数据，指标与图表立即变化。
+覆盖 **课程广场、课程详情、知识中心、学习看板、数据洞察** 五个模块，并额外提供章节页、登录注册、管理员后台（用户 / 课程 / 章节）与管理员数据演示面板。所有 KPI 都由 SQLite 中的原始学习记录计算——改一条数据，指标与图表立即变化。
 
-> 这是一个演示/模板项目：数据与课程内容均为模拟内容，**没有登录与权限系统，不适合直接当作生产系统使用**。
+> 这是一个演示/模板项目：数据与课程内容均为模拟内容，包含会话登录与管理员后台，但**没有邮箱验证、找回密码、MFA 等生产级能力，不适合直接当作生产系统使用**。
+
+> Live demo（早期部署，可能落后于 main）：https://77fpveqc.qwenwork.host/
 
 ---
 
@@ -47,7 +49,10 @@
 - **知识中心**：每门课一套 200 字摘要、学习目标、5 个知识点、5 个术语、3 条 FAQ、3 道带答案解析的测验、原文摘录、AI 初稿 → 人工修正对照。
 - **学习看板**：5 个 KPI、6 张纯 SVG 图表、课程筛选、数据源状态。
 - **数据洞察**：由数据动态生成的洞察、指标公式表、常见口径误区。
-- **数据演示面板**：编辑 / 新增 / 删除记录，导入 / 导出 CSV，恢复初始数据；每次变更后全部指标重新计算。
+- **登录与注册**：邮箱 + 密码注册/登录/退出，scrypt 密码哈希，HttpOnly 会话 Cookie。
+- **用户管理（管理员）**：列表、创建用户、调整角色、启停账号、修改密码；保护最后一个管理员。
+- **课程管理（管理员）**：课程信息、主题色、视频、排序；章节新增/编辑/删除；课程名称变更自动同步学习记录。
+- **数据演示面板（管理员）**：编辑 / 新增 / 删除记录，导入 / 导出 CSV，恢复初始数据；每次变更后全部指标重新计算。
 - **零依赖、零构建**：不需要 `npm install`，离线可用；图表不依赖 CDN。
 - **响应式**：桌面与手机宽度均做了布局与图表适配。
 
@@ -66,6 +71,14 @@ npm start
 也可以直接执行 `./start.sh`（Linux/macOS）或双击 `start.bat`（Windows）。
 
 - 首次启动自动创建 `data/portal.db`，并从 `data/learning_records.csv` 导入 177 条模拟学习记录。
+- 首次启动会自动创建一个管理员账号。建议显式指定密码：
+
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
+```
+
+如果没有设置 `ADMIN_PASSWORD`，程序会生成随机密码并打印在启动日志中（只打印一次）。
+- 普通用户可以自行注册；管理员登录后从右上角“管理后台”进入用户与课程管理。
 - 局域网演示：`HOST=0.0.0.0 npm start`，访问 `http://<本机IP>:8787`。请只在可信网络内使用。
 
 ## 页面与截图
@@ -78,12 +91,17 @@ npm start
 | `#/knowledge/C1` | 知识中心 |
 | `#/dashboard` | 学习看板 |
 | `#/insights` | 数据洞察 |
+| `#/login` / `#/register` | 登录 / 注册 |
+| `#/admin` | 管理后台（用户、课程） |
+| `#/admin/course/C3` | 课程与章节编辑（管理员） |
 
-| 学习看板 | 章节页 |
+| 学习看板（管理员，含数据面板） | 章节页 |
 |---|---|
 | ![学习看板](docs/screenshots/dashboard.jpg) | ![章节页](docs/screenshots/chapter.jpg) |
 | **知识中心** | **移动端** |
 | ![知识中心](docs/screenshots/knowledge.jpg) | <img src="docs/screenshots/mobile.jpg" alt="移动端首页" width="260"> |
+| **登录** | **管理后台** |
+| ![登录](docs/screenshots/login.jpg) | ![管理后台](docs/screenshots/admin.jpg) |
 
 ## 技术栈
 
@@ -91,15 +109,16 @@ npm start
 |---|---|---|
 | 后端 | Node.js 24 `node:http` | 手写路由、静态服务、JSON API，零框架 |
 | 数据库 | `node:sqlite` | Node 内置 SQLite，无需编译原生模块 |
-| 前端 | 原生 ES Modules + hash 路由 | 5 个视图，无构建步骤 |
+| 前端 | 原生 ES Modules + hash 路由 | 公开页面 + 登录注册 + 管理后台，无构建步骤 |
 | 图表 | 手写 SVG | 离线可用，不依赖 ECharts / CDN |
 | 样式 | 原生 CSS + 自定义属性 | 深海军蓝 / 青绿色视觉系统，响应式 |
 | 视频 | ffmpeg 生成的 8 秒 MP4 | 统一示例视频，支持 HTTP Range |
-| 测试 | `scripts/verify.js` | 指标口径、内容完整性、资源校验 |
+| 认证 | `node:crypto` scrypt + SQLite 会话 | HttpOnly / SameSite Cookie，无第三方库 |
+| 测试 | `scripts/verify.js` | 指标口径、内容完整性、资源校验（临时数据库） |
 
 ## 为什么不用 Vue / 构建工具
 
-- 只有 6 个视图（5 个模块 + 章节页），状态简单，原生 hash 路由 + `fetch` 已经足够。
+- 公开页面、章节页、登录注册与简单后台，状态仍然可控，原生 hash 路由 + `fetch` 已经足够。
 - 离线 / 内网 / U 盘环境下，零构建、零依赖最稳；不需要 `npm install` 或打包步骤。
 - 图表手写 SVG，避免外部图表库加载失败导致页面空白。
 - 这套结构也是一个“单文件 HTML 原型”的进阶参考：学生可以先做单文件版本，再理解前后端分离。
@@ -146,6 +165,20 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/auth/me` | 当前登录用户（未登录为 `null`） |
+| POST | `/api/auth/register` | 注册普通用户并建立会话 |
+| POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/logout` | 退出并清除会话 |
+| GET | `/api/admin/users` | 用户列表（管理员） |
+| POST | `/api/admin/users` | 创建用户（管理员） |
+| PATCH | `/api/admin/users/:id` | 角色 / 启停 / 密码（管理员） |
+| GET | `/api/admin/courses` | 课程与章节详情（管理员） |
+| POST | `/api/admin/courses` | 创建课程（管理员） |
+| PATCH | `/api/admin/courses/:id` | 修改课程信息 / 视频（管理员） |
+| DELETE | `/api/admin/courses/:id?force=1` | 删除课程；有学习记录时需 `force`（管理员） |
+| POST | `/api/admin/courses/:id/chapters` | 新增章节（管理员） |
+| PATCH | `/api/admin/courses/:id/chapters/:idx` | 修改章节（管理员） |
+| DELETE | `/api/admin/courses/:id/chapters/:idx` | 删除章节（管理员） |
 | GET | `/api/meta` | 概览指标、数据集状态、课程列表 |
 | GET | `/api/courses?q=&category=` | 课程列表（含每门课统计） |
 | GET | `/api/courses/:id` | 课程详情、统计、章节到达率 |
@@ -163,6 +196,8 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 
 导入校验：课程必须在目录中；日期 `YYYY-MM-DD`；时长 0–1440 分钟；完成章节 ≤ 总章节；成绩 0–100 或留空。非法行会被跳过并返回行号与原因。
 
+> 学习记录写接口（`POST/PATCH/DELETE /api/records*`、导入、导出、重置）均需要管理员会话。读接口保持公开。
+
 ## 配置
 
 | 环境变量 | 默认值 | 作用 |
@@ -170,24 +205,28 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 | `PORT` | `8787` | 监听端口 |
 | `HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 允许局域网访问 |
 | `PORTAL_DB` | `data/portal.db` | 指定 SQLite 数据库文件 |
+| `ADMIN_EMAIL` | `admin@local.test` | 首次创建管理员时使用的邮箱 |
+| `ADMIN_PASSWORD` | 自动生成并打印 | 首次创建管理员时使用的密码 |
+
+管理员只在“没有启用中的管理员”时自动创建；之后请通过管理后台维护账号。
 
 ## 开发与测试
 
 ```bash
 npm run dev      # node --watch，修改后端代码自动重启
 npm run seed     # 恢复 data/learning_records.csv（清空手工修改）
-npm run verify   # 校验指标、知识内容、章节、视频资源
+npm run verify   # 在临时数据库中校验指标、内容、章节、视频资源
 npm test         # 同 verify
 ```
 
-> `verify` / `seed` 都会重置学习记录；仅用于开发与 CI。
+> `verify` 使用临时数据库，不会修改 `data/portal.db`；`seed` 会重置学习记录（不修改管理员与课程）。
 
 CI 会执行 `npm run verify`、语法检查，并启动服务做一次接口冒烟测试。
 
 ## 替换内容与视频
 
-- 课程目录、知识内容、视频配置集中在 `src/content.js`。
-- 章节原文放在 `data/lectures/*.txt`，启动时按“第 N 章”标题拆章写入数据库。修改讲义后重启服务即可重建。
+- 课程目录、知识内容、视频配置集中在 `src/content.js`。**首次启动**会导入初始课程/知识/章节；之后数据库是唯一事实来源，后台编辑不会被启动覆盖。
+- 章节原文放在 `data/lectures/*.txt`，仅当对应课程还没有章节时按“第 N 章”标题拆分导入。后台新增/编辑章节直接写入数据库。
 - 课程视频默认使用 `public/assets/course-intro.mp4`（8 秒、960×540、H.264、无音频）。替换 `DEMO_VIDEO` 的 `src` / `poster` / `durationText` 即可。
 - 每个章节页都有视频位，默认共用同一段示例视频（`CHAPTER_VIDEO_DEFAULT`）。需要单独替换某章时，在 `CHAPTER_VIDEOS` 里覆盖，例如：
 
@@ -204,21 +243,26 @@ export const CHAPTER_VIDEOS = {
 这是一个单进程 Node.js 应用：
 
 ```bash
-HOST=0.0.0.0 PORT=8787 PORTAL_DB=/var/lib/ai-portal/portal.db npm start
+ADMIN_EMAIL=admin@example.com \
+ADMIN_PASSWORD='change-me-please' \
+HOST=0.0.0.0 PORT=8787 PORTAL_DB=/var/lib/ai-portal/portal.db \
+npm start
 ```
 
-- 建议放在 Nginx / Caddy 等反向代理之后，并启用 HTTPS。
-- `data/portal.db` 是唯一持久化数据，注意备份。
+- 建议放在 Nginx / Caddy 等反向代理之后，并启用 HTTPS；应用会根据 `X-Forwarded-Proto: https` 给会话 Cookie 加 `Secure`。
+- `data/portal.db` 是唯一持久化数据（含用户、会话、课程、记录），注意备份。
 - 静态资源与视频由同一进程提供，支持 HTTP Range。
 
 ## 安全说明
 
-- **没有登录与权限系统**。`/api/records` 的写接口对任何能访问服务的人开放，仅适合本地演示或可信内网。
+- **认证是演示级实现**：scrypt 密码哈希、SQLite 会话、HttpOnly + SameSite=Lax Cookie、7 天有效期；登录/注册按 IP 限流。
+- **权限**：普通用户只能读取公开页面；学习记录写入、CSV 导入/导出、用户管理与课程管理均要求管理员。
+- 管理员由环境变量引导创建；请设置强 `ADMIN_PASSWORD` 并登录后修改。保护最后一个启用中的管理员账号（不能自我降级/停用）。
+- 写接口校验同源 `Origin`，降低 CSRF 风险；所有 SQL 使用参数绑定；CSV 导入先校验后整表替换。
+- 响应头包含 CSP（禁止内联脚本）、`X-Frame-Options`、`nosniff`、`Referrer-Policy`；请求体限制 2MB。
+- 前端所有动态文本经 HTML 转义；视频使用本地资源。
 - 仅使用模拟数据；不要写入真实姓名、联系方式、成绩或公司数据。
-- SQL 使用参数绑定；CSV 导入先校验后整表替换，失败回滚。
-- 响应头包含 CSP（禁止内联脚本）、`X-Frame-Options`、`nosniff`、`Referrer-Policy`。
-- 前端所有动态文本经 HTML 转义；请求体限制 2MB。
-- 如需公开演示，建议先增加只读模式或反向代理层鉴权。详见 [SECURITY.md](SECURITY.md)。
+- 没有邮箱验证、找回密码邮件、MFA、审计日志与多租户隔离。公开部署前请评估并补齐。详见 [SECURITY.md](SECURITY.md)。
 
 ## 项目结构
 
@@ -228,12 +272,13 @@ HOST=0.0.0.0 PORT=8787 PORTAL_DB=/var/lib/ai-portal/portal.db npm start
 ├── src/
 │   ├── db.js                  # SQLite 建表、种子导入、校验、CRUD、CSV 导入
 │   ├── analytics.js           # KPI、分课程统计、图表数据、动态洞察、章节推断
-│   ├── content.js             # 课程目录、知识内容、视频配置
+│   ├── auth.js                # 密码哈希、会话、管理员引导
+│   ├── content.js             # 课程目录、知识内容、视频配置（初始种子）
 │   └── csv.js                 # 无依赖 CSV 解析 / 导出
 ├── public/
 │   ├── index.html
 │   ├── css/styles.css
-│   ├── js/app.js              # hash 路由、五个页面、章节页、测验、演示面板
+│   ├── js/app.js              # 路由、公开页面、登录注册、管理后台、演示面板
 │   ├── js/charts.js           # 纯 SVG 图表
 │   └── assets/                # 示例视频、封面
 ├── data/
@@ -252,10 +297,12 @@ HOST=0.0.0.0 PORT=8787 PORTAL_DB=/var/lib/ai-portal/portal.db npm start
 
 ## 已知限制
 
-- 无鉴权、无多用户隔离；写接口默认开放。
+- 认证为演示级：无邮箱验证、找回密码邮件、MFA、审计日志、多租户与细粒度权限。
 - 章节到达率是推断值，原始数据没有逐章记录。
 - 单进程 SQLite，每次请求全量计算 177 条记录；真实数据量需要增量查询与缓存。
 - CSV 导入是整表替换，不支持增量合并。
+- 新建课程没有知识文档；知识中心会显示“暂无知识文档”，需要在代码或数据库中补充。
+- 删除章节保留编号空位，不自动重排（避免与已有测验出处冲突）。
 - 示例课程内容、学生数据与视频均为演示素材，不代表真实教学质量。
 - 浏览器需要较新版本（原生 `<dialog>`、ES Modules、SVG、`<video>`）。
 

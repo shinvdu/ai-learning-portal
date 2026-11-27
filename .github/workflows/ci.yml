@@ -36,8 +36,13 @@ jobs:
           done
 
       - name: Server smoke test
+        env:
+          PORTAL_DB: /tmp/ci-portal.db
+          ADMIN_EMAIL: admin@ci.test
+          ADMIN_PASSWORD: ci-admin-password
         run: |
           set -euo pipefail
+          rm -f /tmp/ci-portal.db /tmp/ci-portal.db-shm /tmp/ci-portal.db-wal
           node server.js > /tmp/server.log 2>&1 &
           PID=$!
           trap 'kill $PID 2>/dev/null || true' EXIT
@@ -51,7 +56,33 @@ jobs:
 
           test -s /tmp/meta.json
           curl -fsS http://127.0.0.1:8787/ > /dev/null
+
+          # Anonymous writes must be rejected.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"student_id":"S999","course_name":"生成式 AI 基础","learning_date":"2026-11-20","learning_minutes":30,"chapters_done":1,"total_chapters":6}' \
+            http://127.0.0.1:8787/api/records)
+          test "$status" = "401"
+
+          # Admin login and user list.
+          curl -fsS -c /tmp/admin-cookies.txt -H 'Content-Type: application/json' \
+            -d '{"email":"admin@ci.test","password":"ci-admin-password"}' \
+            http://127.0.0.1:8787/api/auth/login > /tmp/login.json
+          grep -q '"role":"admin"' /tmp/login.json
+          curl -fsS -b /tmp/admin-cookies.txt http://127.0.0.1:8787/api/admin/users > /tmp/users.json
+          grep -q 'admin@ci.test' /tmp/users.json
+
+          # Learner registration and authorization boundary.
+          email="ci-$(date +%s)@test.local"
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -c /tmp/learner-cookies.txt -H 'Content-Type: application/json' \
+            -d "{\"name\":\"CI Learner\",\"email\":\"$email\",\"password\":\"learner-password\"}" \
+            http://127.0.0.1:8787/api/auth/register)
+          test "$status" = "201"
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -b /tmp/learner-cookies.txt -X POST -H 'Content-Type: application/json' \
+            -d '{"student_id":"S999","course_name":"生成式 AI 基础","learning_date":"2026-11-20","learning_minutes":30,"chapters_done":1,"total_chapters":6}' \
+            http://127.0.0.1:8787/api/records)
+          test "$status" = "403"
+
           status=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Range: bytes=0-99' http://127.0.0.1:8787/assets/course-intro.mp4)
           test "$status" = "206"
 
-          echo "Smoke test passed: API, index, and video Range requests are working."
+          echo "Smoke test passed: API, auth/roles, index, and video Range requests are working."

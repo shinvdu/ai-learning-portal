@@ -22,6 +22,21 @@ Add:
 3. Open `#/chapter/C3/4` and explain the inferred chapter reach.
 4. Resize to a phone width; charts switch to a compact layout.
 
+## Admin setup and walkthrough
+
+Start with explicit credentials for a predictable demo:
+
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
+```
+
+1. Open `#/login`, sign in with the admin account.
+2. Open `管理后台` in the header.
+3. **Users**: create a learner, switch a role, disable an account, or reset a password. Show that the last active admin cannot be demoted or disabled.
+4. **Courses**: edit a course name/color/video, add a chapter, edit its body, then open the public course page and chapter page to see the change.
+5. Back on `#/dashboard`, expand the data playground and edit a record.
+6. `#/register` creates a normal learner. A learner can browse public pages but cannot see the admin area or edit data.
+
 ## Live data playground
 
 1. Open `#/dashboard`.
@@ -56,5 +71,7 @@ Other playground actions:
 - [ ] Chapter page video plays; reach rates match the course detail list.
 - [ ] Quiz accepts answers and shows explanations with sources.
 - [ ] `#/dashboard?course=Python%20%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90` filters KPIs to 17 learners / 55.9%.
+- [ ] Admin login works; anonymous/learner write requests are rejected with 401/403.
+- [ ] Course/chapter edits made in the admin UI immediately appear on public pages.
 - [ ] Mobile width (≈390px) is readable; charts use the compact layout.
 - [ ] No console errors.

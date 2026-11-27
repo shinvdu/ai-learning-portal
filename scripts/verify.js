@@ -1,14 +1,21 @@
 /**
- * 口径校验：重置为种子数据后，核对手册第 5 章的参考值。
- * 注意：会清空手工修改，恢复 data/learning_records.csv。
+ * 口径校验：在临时数据库中导入种子数据，核对参考值、内容与资源。
+ * 不读取也不修改 data/portal.db，因此可以在有后台编辑数据的环境里安全运行。
  *
  * 用法：node scripts/verify.js
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { openDb, resetRecords, getAllRecords, getCourseMeta, getKnowledge, getChapterRows, ROOT } from '../src/db.js';
-import { groupEnrollments, summarize, byCourse, chapterStats } from '../src/analytics.js';
-import { CHAPTER_VIDEO_DEFAULT, CHAPTER_VIDEOS } from '../src/content.js';
+
+const TEMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-learning-portal-verify-'));
+process.env.PORTAL_DB = path.join(TEMP_DIR, 'verify.db');
+
+const { openDb, resetRecords, getAllRecords, getCourseMeta, getKnowledge, getChapterRows, ROOT } = await import(
+  '../src/db.js'
+);
+const { groupEnrollments, summarize, byCourse, chapterStats } = await import('../src/analytics.js');
+const { CHAPTER_VIDEO_DEFAULT, CHAPTER_VIDEOS } = await import('../src/content.js');
 
 const db = openDb();
 const seed = resetRecords(db);
@@ -121,4 +128,5 @@ check(
 
 console.log(`\n${failures === 0 ? '全部通过 ✅' : `${failures} 项不一致 ❌`}\n`);
 db.close();
+fs.rmSync(TEMP_DIR, { recursive: true, force: true });
 process.exit(failures === 0 ? 0 : 1);

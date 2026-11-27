@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { COURSES, KNOWLEDGE } from './content.js';
+import { hashPassword, isEmail, normalizeEmail, passwordProblem } from './auth.js';
 import { parseCsv } from './csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,28 @@ const SCHEMA = `
     value TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'learner' CHECK(role IN ('admin', 'learner')),
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_login_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
   CREATE INDEX IF NOT EXISTS idx_records_course ON records(course_name);
   CREATE INDEX IF NOT EXISTS idx_records_student ON records(student_id);
   CREATE INDEX IF NOT EXISTS idx_records_date ON records(learning_date);
@@ -66,6 +89,20 @@ function readSeedCsv() {
   const file = fs.existsSync(SEED_CSV) ? SEED_CSV : FALLBACK_CSV;
   if (!fs.existsSync(file)) throw new Error(`找不到种子 CSV：${SEED_CSV}`);
   return { text: fs.readFileSync(file, 'utf8'), file };
+}
+
+function ensureColumn(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function parseJson(value, fallback = null) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
 function setMeta(db, key, value) {
@@ -101,64 +138,67 @@ function parseLecture(text) {
     .sort((a, b) => a.idx - b.idx);
 }
 
-/** 把 data/lectures/*.txt 的章节原文同步到 chapters 表（每次启动重建）。 */
+/**
+ * 为首批课程导入讲义章节。已有章节的课程不会覆盖，管理员编辑因此可以保留。
+ * 后台新建的课程没有讲义文件，跳过即可。
+ */
 export function syncChapters(db) {
   for (const course of COURSES) {
     if (!course.lectureFile) continue;
+    const seededKey = `chapters_seeded_${course.id}`;
+    if (getMetaValue(db, seededKey) === '1') continue;
+    const existing = db.prepare('SELECT COUNT(*) AS n FROM chapters WHERE course_id = ?').get(course.id).n;
+    if (existing > 0) {
+      setMeta(db, seededKey, '1');
+      continue;
+    }
+
     const file = path.join(LECTURE_DIR, course.lectureFile);
-    if (!fs.existsSync(file)) throw new Error(`缺少课程讲义：${file}`);
+    if (!fs.existsSync(file)) {
+      console.warn(`[db] 缺少课程讲义，跳过章节导入：${file}`);
+      continue;
+    }
     const parsed = parseLecture(fs.readFileSync(file, 'utf8'));
-    if (parsed.length === 0) throw new Error(`讲义中未找到章节：${file}`);
+    if (parsed.length === 0) {
+      console.warn(`[db] 讲义中未找到章节，跳过：${file}`);
+      continue;
+    }
     if (course.chapters && parsed.length !== course.chapters.length) {
       console.warn(`[db] ${course.name} 讲义章节数 ${parsed.length} 与课程目录 ${course.chapters.length} 不一致`);
     }
-    db.exec('BEGIN');
-    try {
-      db.prepare('DELETE FROM chapters WHERE course_id = ?').run(course.id);
-      const stmt = db.prepare('INSERT INTO chapters(course_id, idx, title, body) VALUES(?, ?, ?, ?)');
-      for (const ch of parsed) stmt.run(course.id, ch.idx, ch.title, ch.body);
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
+    const stmt = db.prepare('INSERT INTO chapters(course_id, idx, title, body) VALUES(?, ?, ?, ?)');
+    for (const ch of parsed) stmt.run(course.id, ch.idx, ch.title, ch.body);
+    setMeta(db, seededKey, '1');
   }
 }
 
+/** 仅在课程表为空时导入初始课程和知识内容。之后数据库是唯一事实来源。 */
 export function syncCatalog(db) {
-  const courseStmt = db.prepare(`
-    INSERT INTO courses(id, name, category, teacher, level, badge, color, intro, chapters_json, sort_order)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      name = excluded.name,
-      category = excluded.category,
-      teacher = excluded.teacher,
-      level = excluded.level,
-      badge = excluded.badge,
-      color = excluded.color,
-      intro = excluded.intro,
-      chapters_json = excluded.chapters_json,
-      sort_order = excluded.sort_order
-  `);
-  COURSES.forEach((c, i) => {
-    courseStmt.run(
-      c.id,
-      c.name,
-      c.category,
-      c.teacher,
-      c.level,
-      c.badge ?? '',
-      c.color ?? '#2F78C4',
-      c.intro ?? '',
-      JSON.stringify(c.chapters),
-      i
-    );
-  });
+  const count = db.prepare('SELECT COUNT(*) AS n FROM courses').get().n;
+  if (count === 0) {
+    const courseStmt = db.prepare(`
+      INSERT INTO courses(id, name, category, teacher, level, badge, color, intro, chapters_json, sort_order)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    COURSES.forEach((c, i) => {
+      courseStmt.run(
+        c.id,
+        c.name,
+        c.category,
+        c.teacher,
+        c.level,
+        c.badge ?? '',
+        c.color ?? '#2F78C4',
+        c.intro ?? '',
+        JSON.stringify(c.chapters),
+        i
+      );
+    });
+  }
 
-  const knowledgeStmt = db.prepare(`
-    INSERT INTO knowledge(course_id, payload_json) VALUES(?, ?)
-    ON CONFLICT(course_id) DO UPDATE SET payload_json = excluded.payload_json
-  `);
+  const knowledgeStmt = db.prepare(
+    'INSERT OR IGNORE INTO knowledge(course_id, payload_json) VALUES(?, ?)'
+  );
   for (const c of COURSES) {
     if (KNOWLEDGE[c.id]) knowledgeStmt.run(c.id, JSON.stringify(KNOWLEDGE[c.id]));
   }
@@ -353,15 +393,16 @@ export function getAllRecords(db) {
 }
 
 export function getCourseMeta(db) {
-  const videoById = new Map(COURSES.map((c) => [c.id, c.video ?? null]));
+  const contentById = new Map(COURSES.map((c) => [c.id, c]));
+  const chapterStmt = db.prepare('SELECT title FROM chapters WHERE course_id = ? ORDER BY idx');
   return db
-    .prepare('SELECT * FROM courses ORDER BY sort_order')
+    .prepare('SELECT * FROM courses ORDER BY sort_order, id')
     .all()
     .map((c) => ({
       ...c,
-      chapters: JSON.parse(c.chapters_json),
+      chapters: chapterStmt.all(c.id).map((row) => row.title),
       chapters_json: undefined,
-      video: videoById.get(c.id) ?? null
+      video: parseJson(c.video_json) ?? contentById.get(c.id)?.video ?? null
     }));
 }
 
@@ -396,12 +437,304 @@ export function resetRecords(db) {
   return result;
 }
 
+/* ------------------------------ users ------------------------------ */
+
+export function getUserAuthByEmail(db, email) {
+  return db.prepare('SELECT * FROM users WHERE email = ?').get(normalizeEmail(email)) ?? null;
+}
+
+export function listUsers(db) {
+  return db
+    .prepare('SELECT id, email, name, role, active, created_at, last_login_at FROM users ORDER BY id')
+    .all()
+    .map((u) => ({ ...u, active: Boolean(u.active) }));
+}
+
+function validateUserInput({ email, name, password, role }, { creating }) {
+  const errors = [];
+  const cleanName = String(name ?? '').trim();
+  const cleanEmail = normalizeEmail(email);
+  if (cleanName.length < 1 || cleanName.length > 60) errors.push('姓名需要 1–60 个字符');
+  if (creating || email !== undefined) {
+    if (!isEmail(cleanEmail)) errors.push('邮箱格式不正确');
+  }
+  if (creating || password !== undefined) {
+    const problem = passwordProblem(password);
+    if (problem) errors.push(problem);
+  }
+  if (role !== undefined && !['admin', 'learner'].includes(role)) errors.push('角色只能是 admin 或 learner');
+  return { errors, cleanName, cleanEmail };
+}
+
+export function createUser(db, input) {
+  const v = validateUserInput({ ...input, role: input.role ?? 'learner' }, { creating: true });
+  if (v.errors.length) return { ok: false, errors: v.errors };
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(v.cleanEmail)) {
+    return { ok: false, errors: ['该邮箱已注册'] };
+  }
+  const result = db
+    .prepare('INSERT INTO users(email, name, password_hash, role, active) VALUES(?, ?, ?, ?, ?)')
+    .run(v.cleanEmail, v.cleanName, hashPassword(input.password), input.role ?? 'learner', input.active === false ? 0 : 1);
+  return { ok: true, user: listUsers(db).find((u) => u.id === Number(result.lastInsertRowid)) };
+}
+
+export function updateUser(db, id, patch, { actingUserId } = {}) {
+  const current = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  if (!current) return { ok: false, notFound: true, errors: ['用户不存在'] };
+
+  const next = {
+    name: patch.name !== undefined ? String(patch.name).trim() : current.name,
+    role: patch.role !== undefined ? patch.role : current.role,
+    active: patch.active !== undefined ? Boolean(patch.active) : Boolean(current.active),
+    password: patch.password
+  };
+  const v = validateUserInput({ name: next.name, password: next.password, role: next.role }, { creating: false });
+  if (v.errors.length) return { ok: false, errors: v.errors };
+
+  const isAdmin = current.role === 'admin' && current.active;
+  const losingAdmin = isAdmin && (next.role !== 'admin' || !next.active);
+  if (losingAdmin) {
+    const admins = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1").get().n;
+    if (admins <= 1) return { ok: false, errors: ['不能移除最后一个启用的管理员'] };
+    if (actingUserId === id) return { ok: false, errors: ['不能降级或停用当前登录的管理员'] };
+  }
+
+  const hash = next.password !== undefined ? hashPassword(next.password) : current.password_hash;
+  db.prepare('UPDATE users SET name = ?, role = ?, active = ?, password_hash = ? WHERE id = ?').run(
+    next.name,
+    next.role,
+    next.active ? 1 : 0,
+    hash,
+    id
+  );
+  if (!next.active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  return { ok: true, user: listUsers(db).find((u) => u.id === id) };
+}
+
+export function touchLogin(db, id) {
+  db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(id);
+}
+
+/* ------------------------------ courses ------------------------------ */
+
+const COURSE_BADGE = (name) =>
+  String(name)
+    .replace(/[^\p{L}\p{N}]/gu, '')
+    .slice(0, 2)
+    .toUpperCase() || 'AI';
+
+function validateCourseInput(input, { partial = false } = {}) {
+  const errors = [];
+  const out = {};
+  const take = (key, maxLen, required = false) => {
+    if (!partial || input[key] !== undefined) {
+      const value = String(input[key] ?? '').trim();
+      if (required && !value) errors.push(`${key} 不能为空`);
+      else if (value.length > maxLen) errors.push(`${key} 过长`);
+      out[key] = value;
+    }
+  };
+  take('name', 80, !partial);
+  take('category', 40);
+  take('teacher', 40);
+  take('level', 40);
+  take('badge', 8);
+  take('intro', 500);
+
+  if (!partial || input.color !== undefined) {
+    const color = String(input.color ?? '#2F78C4').trim();
+    if (!/^#[0-9a-f]{6}$/i.test(color)) errors.push('color 必须是 #RRGGBB');
+    out.color = color;
+  }
+  if (!partial || input.sort_order !== undefined) {
+    const sort = Number(input.sort_order ?? 0);
+    if (!Number.isInteger(sort)) errors.push('sort_order 必须是整数');
+    out.sort_order = Number.isInteger(sort) ? sort : 0;
+  }
+  if (input.video !== undefined) {
+    const v = input.video;
+    if (v === null) out.video = null;
+    else if (typeof v !== 'object' || !String(v.src ?? '').trim()) errors.push('视频 src 不能为空');
+    else {
+      out.video = {
+        src: String(v.src).trim().slice(0, 500),
+        poster: String(v.poster ?? '').trim().slice(0, 500),
+        durationText: String(v.durationText ?? '示例视频').trim().slice(0, 40),
+        label: '课程导览视频',
+        note: String(v.note ?? '示例视频，可在后台替换。').trim().slice(0, 200),
+        isPlaceholder: true
+      };
+    }
+  }
+  return { errors, out };
+}
+
+function courseNameTaken(db, name, excludeId = null) {
+  return Boolean(
+    db.prepare('SELECT id FROM courses WHERE name = ? AND id <> ?').get(name, excludeId ?? '')
+  );
+}
+
+function nextCourseId(db) {
+  const ids = db
+    .prepare('SELECT id FROM courses')
+    .all()
+    .map((r) => Number(String(r.id).replace(/\D/g, '')) || 0);
+  return `C${Math.max(0, ...ids) + 1}`;
+}
+
+export function createCourse(db, input) {
+  const v = validateCourseInput(input);
+  if (v.errors.length) return { ok: false, errors: v.errors };
+  if (courseNameTaken(db, v.out.name)) return { ok: false, errors: ['课程名称已存在'] };
+  const id = nextCourseId(db);
+  db.prepare(
+    `INSERT INTO courses(id, name, category, teacher, level, badge, color, intro, chapters_json, video_json, sort_order)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`
+  ).run(
+    id,
+    v.out.name,
+    v.out.category || '未分类',
+    v.out.teacher || '待定',
+    v.out.level || '入门',
+    v.out.badge || COURSE_BADGE(v.out.name),
+    v.out.color || '#2F78C4',
+    v.out.intro || '',
+    v.out.video ? JSON.stringify(v.out.video) : null,
+    v.out.sort_order || 0
+  );
+  return { ok: true, course: getCourseMeta(db).find((c) => c.id === id) };
+}
+
+export function updateCourse(db, id, patch) {
+  const current = db.prepare('SELECT * FROM courses WHERE id = ?').get(id);
+  if (!current) return { ok: false, notFound: true, errors: ['课程不存在'] };
+  const v = validateCourseInput(patch, { partial: true });
+  if (v.errors.length) return { ok: false, errors: v.errors };
+
+  const next = {
+    name: v.out.name ?? current.name,
+    category: v.out.category ?? current.category,
+    teacher: v.out.teacher ?? current.teacher,
+    level: v.out.level ?? current.level,
+    badge: v.out.badge ?? current.badge,
+    color: v.out.color ?? current.color,
+    intro: v.out.intro ?? current.intro,
+    sort_order: v.out.sort_order ?? current.sort_order
+  };
+  if (!next.name) return { ok: false, errors: ['课程名称不能为空'] };
+  if (next.name !== current.name && courseNameTaken(db, next.name, id)) {
+    return { ok: false, errors: ['课程名称已存在'] };
+  }
+  const videoJson = patch.video !== undefined ? (v.out.video ? JSON.stringify(v.out.video) : null) : current.video_json;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      'UPDATE courses SET name = ?, category = ?, teacher = ?, level = ?, badge = ?, color = ?, intro = ?, video_json = ?, sort_order = ? WHERE id = ?'
+    ).run(
+      next.name,
+      next.category,
+      next.teacher,
+      next.level,
+      next.badge,
+      next.color,
+      next.intro,
+      videoJson,
+      next.sort_order,
+      id
+    );
+    if (next.name !== current.name) {
+      db.prepare('UPDATE records SET course_name = ? WHERE course_name = ?').run(next.name, current.name);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { ok: true, course: getCourseMeta(db).find((c) => c.id === id) };
+}
+
+export function deleteCourse(db, id, { force = false } = {}) {
+  const current = db.prepare('SELECT * FROM courses WHERE id = ?').get(id);
+  if (!current) return { ok: false, notFound: true, errors: ['课程不存在'] };
+  const recordCount = db.prepare('SELECT COUNT(*) AS n FROM records WHERE course_name = ?').get(current.name).n;
+  if (recordCount > 0 && !force) {
+    return { ok: false, conflict: true, records: recordCount, errors: [`课程还有 ${recordCount} 条学习记录`] };
+  }
+  db.exec('BEGIN');
+  try {
+    if (force) db.prepare('DELETE FROM records WHERE course_name = ?').run(current.name);
+    db.prepare('DELETE FROM chapters WHERE course_id = ?').run(id);
+    db.prepare('DELETE FROM knowledge WHERE course_id = ?').run(id);
+    db.prepare('DELETE FROM courses WHERE id = ?').run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { ok: true, deletedRecords: recordCount };
+}
+
+function validateChapter(input, { partial = false } = {}) {
+  const errors = [];
+  const out = {};
+  if (!partial || input.title !== undefined) {
+    const title = String(input.title ?? '').trim();
+    if (!title) errors.push('章节标题不能为空');
+    else if (title.length > 160) errors.push('章节标题过长');
+    out.title = title;
+  }
+  if (!partial || input.body !== undefined) {
+    const body = String(input.body ?? '').trim();
+    if (!body) errors.push('章节正文不能为空');
+    else if (body.length > 50000) errors.push('章节正文过长');
+    out.body = body;
+  }
+  return { errors, out };
+}
+
+export function addChapter(db, courseId, input) {
+  if (!db.prepare('SELECT id FROM courses WHERE id = ?').get(courseId)) {
+    return { ok: false, notFound: true, errors: ['课程不存在'] };
+  }
+  const v = validateChapter(input);
+  if (v.errors.length) return { ok: false, errors: v.errors };
+  const max = db.prepare('SELECT MAX(idx) AS n FROM chapters WHERE course_id = ?').get(courseId).n ?? 0;
+  const idx = Number(max) + 1;
+  db.prepare('INSERT INTO chapters(course_id, idx, title, body) VALUES(?, ?, ?, ?)').run(
+    courseId,
+    idx,
+    v.out.title,
+    v.out.body
+  );
+  return { ok: true, chapter: { idx, title: v.out.title, body: v.out.body } };
+}
+
+export function updateChapter(db, courseId, idx, input) {
+  const current = db.prepare('SELECT idx, title, body FROM chapters WHERE course_id = ? AND idx = ?').get(courseId, idx);
+  if (!current) return { ok: false, notFound: true, errors: ['章节不存在'] };
+  const v = validateChapter(input, { partial: true });
+  if (v.errors.length) return { ok: false, errors: v.errors };
+  const title = v.out.title ?? current.title;
+  const body = v.out.body ?? current.body;
+  db.prepare('UPDATE chapters SET title = ?, body = ? WHERE course_id = ? AND idx = ?').run(title, body, courseId, idx);
+  return { ok: true, chapter: { idx, title, body } };
+}
+
+export function deleteChapter(db, courseId, idx) {
+  const result = db.prepare('DELETE FROM chapters WHERE course_id = ? AND idx = ?').run(courseId, idx);
+  if (Number(result.changes) === 0) return { ok: false, notFound: true, errors: ['章节不存在'] };
+  return { ok: true };
+}
+
 export function openDb() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const db = new DatabaseSync(DB_PATH);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  ensureColumn(db, 'courses', 'video_json', 'TEXT');
   syncCatalog(db);
   syncChapters(db);
 

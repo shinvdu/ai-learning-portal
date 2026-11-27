@@ -13,7 +13,7 @@ npm run dev     # restart on backend changes
 npm run verify  # metrics + content + assets checks
 ```
 
-`npm run verify` resets learning records to the seed CSV. Do not run it against a database you want to keep.
+`npm run verify` uses a temporary SQLite database, so it does not modify `data/portal.db`. `npm run seed` resets learning records only; users and courses are preserved.
 
 ## Ground rules
 
@@ -30,7 +30,8 @@ npm run verify  # metrics + content + assets checks
 - Chinese UI copy, English code identifiers and comments where practical.
 - New API endpoints: return JSON, validate input, use parameterized SQL.
 - New metrics: implement in `src/analytics.js`, expose via the API, render with a formula hint, and add a check in `scripts/verify.js`.
-- New courses: update `src/content.js` and add a matching lecture file under `data/lectures/`.
+- New courses: use the admin UI for normal course/chapter management. Seed content for a fresh database lives in `src/content.js` + `data/lectures/`.
+- Auth-sensitive changes: keep write/admin endpoints behind `requireAdmin`, never log passwords or session tokens, and keep cookies `HttpOnly` / `SameSite`.
 
 ## Testing
 

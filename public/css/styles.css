@@ -2298,6 +2298,232 @@ input::placeholder {
   margin-top: 18px;
 }
 
+/* ============================ 认证 / 管理后台 ============================ */
+
+.user-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.user-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: #dfe4ff;
+}
+
+.user-link {
+  color: #cfd3ff;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.user-link:hover {
+  color: #fff;
+}
+
+.user-admin {
+  font-size: 12px;
+  color: #c9fff6;
+  background: rgba(6, 199, 204, 0.16);
+  border: 1px solid rgba(6, 199, 204, 0.4);
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.auth-page {
+  max-width: 980px;
+  margin: 20px auto 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 20px;
+  align-items: stretch;
+}
+
+.auth-card {
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.auth-card h1 {
+  font-size: 32px;
+  margin-bottom: 6px;
+}
+
+.auth-sub {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4b5568;
+}
+
+.auth-form .btn {
+  margin-top: 6px;
+}
+
+.auth-alt {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.auth-aside {
+  background:
+    radial-gradient(360px 200px at 90% 0%, rgba(6, 199, 204, 0.25), transparent 65%),
+    linear-gradient(145deg, #00002e, #10236f 70%, #1b3a8c);
+  border-radius: var(--radius);
+  padding: 28px;
+  color: #d7dcff;
+  box-shadow: var(--shadow-lg);
+}
+
+.auth-aside h2 {
+  color: #fff;
+  font-size: 16px;
+  margin: 18px 0 6px;
+}
+
+.auth-aside h2:first-child {
+  margin-top: 0;
+}
+
+.auth-aside ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.auth-aside li {
+  margin: 5px 0;
+}
+
+.auth-aside .side-note {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #b9c4ff;
+  margin-top: 18px;
+}
+
+.auth-gate {
+  max-width: 620px;
+  margin: 50px auto;
+  text-align: center;
+}
+
+.auth-gate h1 {
+  font-size: 30px;
+  margin: 4px 0 8px;
+}
+
+.auth-gate p {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.admin-head-actions {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.status-pill {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-right: 6px;
+}
+
+.status-pill.ok {
+  background: #edfaf3;
+  color: #167a4d;
+  border: 1px solid #bfe8cf;
+}
+
+.status-pill.off {
+  background: #fff1f1;
+  color: #a52f2f;
+  border: 1px solid #f0b0b0;
+}
+
+.admin-form h3 {
+  font-size: 15px;
+  margin: 20px 0 10px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.admin-form .form-actions {
+  justify-content: flex-end;
+}
+
+textarea {
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.form-actions {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.admin-chapter-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.admin-chapter-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 4px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.admin-chapter-list li:last-child {
+  border-bottom: 0;
+}
+
+.admin-chapter-list .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 /* ============================ 页脚 / 状态 ============================ */
 
 .site-footer {
@@ -2566,6 +2792,23 @@ input::placeholder {
     padding: 22px;
   }
 
+  .auth-page {
+    grid-template-columns: 1fr;
+    margin-top: 8px;
+  }
+
+  .auth-card {
+    padding: 22px;
+  }
+
+  .user-name {
+    max-width: 84px;
+  }
+
+  .admin-head-actions {
+    width: 100%;
+  }
+
   .chapter-head {
     padding: 20px;
   }
@@ -2617,6 +2860,18 @@ input::placeholder {
 }
 
 @media (max-width: 480px) {
+  .sim-badge {
+    display: none;
+  }
+
+  .user-name {
+    max-width: 68px;
+  }
+
+  .admin-chapter-list li {
+    align-items: flex-start;
+  }
+
   .kpi-grid,
   .stat-row,
   .snapshot-row {
