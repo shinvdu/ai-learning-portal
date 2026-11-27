@@ -57,6 +57,12 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 
 If `ADMIN_PASSWORD` is omitted, a random password is generated and printed once in the startup log. Learners can register from the UI; admins use the “管理后台” link in the header.
 
+If the only admin is locked out, reset it from the CLI (this revokes that account's sessions):
+
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='new-strong-password' npm run admin:reset
+```
+
 LAN demo: `HOST=0.0.0.0 npm start`.
 
 ## Stack
@@ -116,7 +122,7 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 | GET | `/api/knowledge/:id` | Knowledge center content |
 | GET | `/api/dashboard?course=` | KPIs, charts, insights |
 | GET | `/api/insights` | Generated insights, formulas, pitfalls |
-| GET | `/api/records` | Paginated learning records |
+| GET | `/api/records` | Paginated learning records (admin) |
 | POST / PATCH / DELETE | `/api/records...` | Record CRUD (demo, unauthenticated) |
 | POST | `/api/records/import` | Replace all records from CSV |
 | POST | `/api/admin/reset` | Restore seed CSV |
@@ -130,7 +136,7 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for LAN) |
 | `PORTAL_DB` | `data/portal.db` | SQLite database path |
 | `ADMIN_EMAIL` | `admin@local.test` | Email for the bootstrapped admin |
-| `ADMIN_PASSWORD` | generated and printed once | Password for the bootstrapped admin |
+| `ADMIN_PASSWORD` | generated and printed once | Password for the bootstrapped admin (min 8 characters) |
 
 ## Development
 
@@ -146,7 +152,7 @@ npm test
 ## Security
 
 - Demo-grade auth: scrypt password hashing, SQLite sessions, HttpOnly + SameSite=Lax cookies, login/register rate limiting.
-- Role check: record writes and all admin endpoints require an admin session.
+- Role check: raw record access and all admin endpoints require an admin session.
 - Bootstrap the admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; the last active admin cannot demote or disable themselves.
 - Same-origin checks on mutating requests, parameterized SQL, CSV validation, HTML escaping, CSP, 2 MB body limit.
 - No email verification, password recovery email, MFA, audit log, or multi-tenancy.

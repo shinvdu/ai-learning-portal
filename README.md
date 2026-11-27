@@ -186,7 +186,7 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 | GET | `/api/knowledge/:id` | 知识中心内容 |
 | GET | `/api/dashboard?course=` | KPI、分课程统计、趋势、分布、洞察 |
 | GET | `/api/insights` | 动态洞察、口径公式、常见误区、数据质量 |
-| GET | `/api/records?q=&course=&student=&limit=&offset=` | 学习记录分页 |
+| GET | `/api/records?q=&course=&student=&limit=&offset=` | 学习记录分页（管理员） |
 | POST | `/api/records` | 新增记录（校验后写入） |
 | PATCH | `/api/records/:id` | 修改记录（字段白名单） |
 | DELETE | `/api/records/:id` | 删除记录 |
@@ -196,7 +196,7 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 
 导入校验：课程必须在目录中；日期 `YYYY-MM-DD`；时长 0–1440 分钟；完成章节 ≤ 总章节；成绩 0–100 或留空。非法行会被跳过并返回行号与原因。
 
-> 学习记录写接口（`POST/PATCH/DELETE /api/records*`、导入、导出、重置）均需要管理员会话。读接口保持公开。
+> 学习记录接口（读、写、导入、导出、重置）均需要管理员会话；公开页面只使用聚合后的看板/课程接口，不暴露逐条记录。
 
 ## 配置
 
@@ -206,9 +206,15 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 | `HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 允许局域网访问 |
 | `PORTAL_DB` | `data/portal.db` | 指定 SQLite 数据库文件 |
 | `ADMIN_EMAIL` | `admin@local.test` | 首次创建管理员时使用的邮箱 |
-| `ADMIN_PASSWORD` | 自动生成并打印 | 首次创建管理员时使用的密码 |
+| `ADMIN_PASSWORD` | 自动生成并打印 | 首次创建管理员时使用的密码（至少 8 字符） |
 
 管理员只在“没有启用中的管理员”时自动创建；之后请通过管理后台维护账号。
+
+忘记管理员密码、且无法登录后台时，可以用脚本重置（会撤销该账号的所有会话）：
+
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='new-strong-password' npm run admin:reset
+```
 
 ## 开发与测试
 
@@ -287,6 +293,7 @@ npm start
 │   └── portal.db              # 运行时生成（gitignored）
 ├── scripts/
 │   ├── seed.js
+│   ├── reset-admin.js
 │   └── verify.js
 ├── docs/
 │   ├── ARCHITECTURE.md

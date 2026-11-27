@@ -80,6 +80,15 @@ export function purgeExpiredSessions(db) {
   return Number(result.changes);
 }
 
+/** Revoke a user's sessions, optionally keeping the current session. */
+export function destroyUserSessions(db, userId, { exceptToken = null } = {}) {
+  if (exceptToken) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(userId, sessionId(exceptToken));
+  } else {
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  }
+}
+
 export function parseCookies(header) {
   const out = {};
   for (const part of String(header ?? '').split(';')) {
@@ -104,8 +113,8 @@ export function sessionCookie(token, { secure = false } = {}) {
   }`;
 }
 
-export function clearSessionCookie() {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function clearSessionCookie({ secure = false } = {}) {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
 }
 
 /**
@@ -118,8 +127,11 @@ export function ensureAdminUser(db) {
   if (admins > 0) return { created: false };
 
   const email = normalizeEmail(process.env.ADMIN_EMAIL || 'admin@local.test');
+  if (!isEmail(email)) throw new Error('ADMIN_EMAIL 不是合法邮箱');
   const generated = !process.env.ADMIN_PASSWORD;
   const password = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
+  const problem = passwordProblem(password);
+  if (problem) throw new Error(`ADMIN_PASSWORD 不合规：${problem}`);
   const hash = hashPassword(password);
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
 
@@ -135,6 +147,3 @@ export function ensureAdminUser(db) {
   return { created: true, email, password, generated };
 }
 
-export function publicUser(row) {
-  return row ? { id: row.id, email: row.email, name: row.name, role: row.role, active: Boolean(row.active) } : null;
-}

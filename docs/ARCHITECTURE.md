@@ -213,7 +213,7 @@ Consequences:
 - Mutating requests with a cross-site `Origin` are rejected.
 - Admin bootstrap: when no active admin exists, create one from `ADMIN_EMAIL` / `ADMIN_PASSWORD`, or generate a random password and print it once.
 - Admin constraints: the last active admin cannot be demoted or disabled; an admin cannot demote or disable their own account. Disabling a user deletes their sessions.
-- Authorization: public read APIs need no session; record writes and all `/api/admin/*` routes require `role = admin`.
+- Authorization: public aggregates (courses, chapters, knowledge, dashboard, insights) need no session. Both reading and writing raw learning records, CSV import/export, and all `/api/admin/*` routes require `role = admin`.
 - Admin course deletion refuses to remove a course that still has learning records unless `force=1`; force deletes the course and its records in one transaction. Renaming a course updates `records.course_name` in the same transaction.
 
 ## API design
@@ -281,7 +281,7 @@ CI additionally syntax-checks ES modules and performs a server smoke test.
 This is a demo with basic, self-contained authentication:
 
 - scrypt password hashes, hashed session tokens, HttpOnly/SameSite cookies,
-- admin/learner roles; record writes and admin routes require admin,
+- admin/learner roles; raw record access and admin routes require admin,
 - rate limiting on login/register, same-origin checks on mutations,
 - simulated data only,
 - CSP disallows inline scripts; dynamic text is escaped,

@@ -38,6 +38,7 @@ import {
   getSessionUser,
   createSession,
   destroySession,
+  destroyUserSessions,
   sessionCookie,
   clearSessionCookie,
   verifyPassword,
@@ -155,6 +156,10 @@ function isSecureRequest(req) {
 }
 
 const authHits = new Map();
+function clearRateLimit(key) {
+  authHits.delete(key);
+}
+
 function rateLimited(key, max = 20, windowMs = 10 * 60 * 1000) {
   const now = Date.now();
   let bucket = authHits.get(key);
@@ -259,7 +264,8 @@ function apiRoute(db, req, res, url, ctx) {
   }
 
   if (req.method === 'POST' && p === '/api/auth/register') {
-    if (rateLimited(`register:${req.socket.remoteAddress}`)) {
+    const limitKey = `register:${req.socket.remoteAddress}`;
+    if (rateLimited(limitKey)) {
       return sendJson(res, 429, { error: '尝试次数过多，请稍后再试' });
     }
     return readJson(req).then((body) => {
@@ -271,6 +277,7 @@ function apiRoute(db, req, res, url, ctx) {
         active: true
       });
       if (!result.ok) return sendJson(res, 400, { error: result.errors[0], errors: result.errors });
+      clearRateLimit(limitKey);
       const session = createSession(db, result.user.id);
       return sendJson(res, 201, { user: result.user }, {
         'Set-Cookie': sessionCookie(session.token, { secure: isSecureRequest(req) })
@@ -279,7 +286,8 @@ function apiRoute(db, req, res, url, ctx) {
   }
 
   if (req.method === 'POST' && p === '/api/auth/login') {
-    if (rateLimited(`login:${req.socket.remoteAddress}`)) {
+    const limitKey = `login:${req.socket.remoteAddress}`;
+    if (rateLimited(limitKey)) {
       return sendJson(res, 429, { error: '尝试次数过多，请稍后再试' });
     }
     return readJson(req).then((body) => {
@@ -287,6 +295,7 @@ function apiRoute(db, req, res, url, ctx) {
       if (!row || !row.active || !verifyPassword(body.password, row.password_hash)) {
         return sendJson(res, 401, { error: '邮箱或密码错误' });
       }
+      clearRateLimit(limitKey);
       const session = createSession(db, row.id);
       touchLogin(db, row.id);
       return sendJson(
@@ -300,7 +309,7 @@ function apiRoute(db, req, res, url, ctx) {
 
   if (req.method === 'POST' && p === '/api/auth/logout') {
     destroySession(db, ctx.token);
-    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie() });
+    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie({ secure: isSecureRequest(req) }) });
   }
 
   /* --------------------------- admin gate --------------------------- */
@@ -328,8 +337,14 @@ function apiRoute(db, req, res, url, ctx) {
   const adminUserMatch = p.match(/^\/api\/admin\/users\/(\d+)$/);
   if (adminUserMatch && req.method === 'PATCH') {
     return readJson(req).then((body) => {
-      const result = updateUser(db, Number(adminUserMatch[1]), body, { actingUserId: ctx.user.id });
+      const targetId = Number(adminUserMatch[1]);
+      const result = updateUser(db, targetId, body, { actingUserId: ctx.user.id });
       if (!result.ok) return sendJson(res, result.notFound ? 404 : 400, result);
+      if (body.password !== undefined) {
+        destroyUserSessions(db, targetId, {
+          exceptToken: targetId === ctx.user.id ? ctx.token : null
+        });
+      }
       return sendJson(res, 200, result);
     });
   }
@@ -474,6 +489,7 @@ function apiRoute(db, req, res, url, ctx) {
   }
 
   if (req.method === 'GET' && p === '/api/records') {
+    if (!requireAdmin(res, ctx.user)) return;
     return sendJson(
       res,
       200,
@@ -621,7 +637,12 @@ function streamFile(req, res, file) {
 
 export function createServer(db) {
   return http.createServer((req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    } catch {
+      return sendText(res, 400, 'Bad request');
+    }
 
     if (url.pathname.startsWith('/api/')) {
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && !isSameOrigin(req)) {

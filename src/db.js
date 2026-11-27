@@ -147,6 +147,7 @@ export function syncChapters(db) {
     if (!course.lectureFile) continue;
     const seededKey = `chapters_seeded_${course.id}`;
     if (getMetaValue(db, seededKey) === '1') continue;
+    if (!db.prepare('SELECT 1 AS ok FROM courses WHERE id = ?').get(course.id)) continue;
     const existing = db.prepare('SELECT COUNT(*) AS n FROM chapters WHERE course_id = ?').get(course.id).n;
     if (existing > 0) {
       setMeta(db, seededKey, '1');
@@ -166,16 +167,29 @@ export function syncChapters(db) {
     if (course.chapters && parsed.length !== course.chapters.length) {
       console.warn(`[db] ${course.name} 讲义章节数 ${parsed.length} 与课程目录 ${course.chapters.length} 不一致`);
     }
-    const stmt = db.prepare('INSERT INTO chapters(course_id, idx, title, body) VALUES(?, ?, ?, ?)');
-    for (const ch of parsed) stmt.run(course.id, ch.idx, ch.title, ch.body);
-    setMeta(db, seededKey, '1');
+    db.exec('BEGIN');
+    try {
+      const stmt = db.prepare('INSERT INTO chapters(course_id, idx, title, body) VALUES(?, ?, ?, ?)');
+      for (const ch of parsed) stmt.run(course.id, ch.idx, ch.title, ch.body);
+      setMeta(db, seededKey, '1');
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   }
 }
 
-/** 仅在课程表为空时导入初始课程和知识内容。之后数据库是唯一事实来源。 */
+/**
+ * Import initial courses and knowledge only once. A meta flag prevents a
+ * deliberate "delete all courses" from being undone on the next restart.
+ */
 export function syncCatalog(db) {
+  const seedKey = 'catalog_seeded';
+  const alreadySeeded = getMetaValue(db, seedKey) === '1';
   const count = db.prepare('SELECT COUNT(*) AS n FROM courses').get().n;
-  if (count === 0) {
+
+  if (!alreadySeeded && count === 0) {
     const courseStmt = db.prepare(`
       INSERT INTO courses(id, name, category, teacher, level, badge, color, intro, chapters_json, sort_order)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -195,16 +209,27 @@ export function syncCatalog(db) {
       );
     });
   }
+  if (!alreadySeeded) setMeta(db, seedKey, '1');
 
+  const courseExists = db.prepare('SELECT 1 AS ok FROM courses WHERE id = ?');
   const knowledgeStmt = db.prepare(
     'INSERT OR IGNORE INTO knowledge(course_id, payload_json) VALUES(?, ?)'
   );
   for (const c of COURSES) {
-    if (KNOWLEDGE[c.id]) knowledgeStmt.run(c.id, JSON.stringify(KNOWLEDGE[c.id]));
+    if (KNOWLEDGE[c.id] && courseExists.get(c.id)) {
+      knowledgeStmt.run(c.id, JSON.stringify(KNOWLEDGE[c.id]));
+    }
   }
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isCalendarDate(value) {
+  if (!DATE_RE.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
 
 function validateRow(raw, courseNames) {
   const errors = [];
@@ -224,8 +249,8 @@ function validateRow(raw, courseNames) {
   if (!row.course_name) errors.push('course_name 不能为空');
   else if (!courseNames.has(row.course_name)) errors.push(`未知课程：${row.course_name}`);
 
-  if (!DATE_RE.test(row.learning_date) || Number.isNaN(Date.parse(`${row.learning_date}T00:00:00Z`))) {
-    errors.push('learning_date 需为 YYYY-MM-DD');
+  if (!isCalendarDate(row.learning_date)) {
+    errors.push('learning_date 需为有效的 YYYY-MM-DD 日期');
   }
 
   if (!Number.isInteger(row.learning_minutes) || row.learning_minutes < 0 || row.learning_minutes > 1440) {
@@ -396,14 +421,19 @@ export function getCourseMeta(db) {
   const contentById = new Map(COURSES.map((c) => [c.id, c]));
   const chapterStmt = db.prepare('SELECT title FROM chapters WHERE course_id = ? ORDER BY idx');
   return db
-    .prepare('SELECT * FROM courses ORDER BY sort_order, id')
+    .prepare('SELECT * FROM courses ORDER BY sort_order, CAST(SUBSTR(id, 2) AS INTEGER), id')
     .all()
-    .map((c) => ({
-      ...c,
-      chapters: chapterStmt.all(c.id).map((row) => row.title),
-      chapters_json: undefined,
-      video: parseJson(c.video_json) ?? contentById.get(c.id)?.video ?? null
-    }));
+    .map((c) => {
+      const hasVideoOverride = c.video_json !== null && c.video_json !== undefined;
+      return {
+        ...c,
+        chapters: chapterStmt.all(c.id).map((row) => row.title),
+        chapters_json: undefined,
+        // A stored JSON "null" means "admin removed the video"; only a NULL
+        // column falls back to the seed configuration.
+        video: hasVideoOverride ? parseJson(c.video_json) : contentById.get(c.id)?.video ?? null
+      };
+    });
 }
 
 export function getChapterRows(db, courseId) {
@@ -553,8 +583,13 @@ function validateCourseInput(input, { partial = false } = {}) {
   }
   if (input.video !== undefined) {
     const v = input.video;
+    const safeLocal = (value) => {
+      const s = String(value ?? '').trim();
+      return s === '' || (/^\/(?!\/)/.test(s) && !s.includes('..') && !s.includes('\\'));
+    };
     if (v === null) out.video = null;
     else if (typeof v !== 'object' || !String(v.src ?? '').trim()) errors.push('视频 src 不能为空');
+    else if (!safeLocal(v.src) || !safeLocal(v.poster)) errors.push('视频与封面必须使用站内路径（以 / 开头）');
     else {
       out.video = {
         src: String(v.src).trim().slice(0, 500),
@@ -576,11 +611,15 @@ function courseNameTaken(db, name, excludeId = null) {
 }
 
 function nextCourseId(db) {
-  const ids = db
-    .prepare('SELECT id FROM courses')
-    .all()
-    .map((r) => Number(String(r.id).replace(/\D/g, '')) || 0);
-  return `C${Math.max(0, ...ids) + 1}`;
+  const rows = db.prepare('SELECT id FROM courses').all();
+  const used = new Set(rows.map((r) => r.id));
+  const maxExisting = Math.max(0, ...rows.map((r) => Number(String(r.id).replace(/\D/g, '')) || 0));
+  let next = Math.max(Number(getMetaValue(db, 'course_seq') || 0), maxExisting) + 1;
+  while (used.has(`C${next}`)) next += 1;
+  // Persist a monotonic sequence so deleting the newest course does not reuse
+  // its ID (old links/bookmarks would silently point at a different course).
+  setMeta(db, 'course_seq', next);
+  return `C${next}`;
 }
 
 export function createCourse(db, input) {
@@ -588,6 +627,11 @@ export function createCourse(db, input) {
   if (v.errors.length) return { ok: false, errors: v.errors };
   if (courseNameTaken(db, v.out.name)) return { ok: false, errors: ['课程名称已存在'] };
   const id = nextCourseId(db);
+  const existingSort = Math.max(
+    0,
+    ...db.prepare('SELECT sort_order FROM courses').all().map((r) => Number(r.sort_order) || 0)
+  );
+  const sortOrder = input.sort_order === undefined ? existingSort + 1 : v.out.sort_order;
   db.prepare(
     `INSERT INTO courses(id, name, category, teacher, level, badge, color, intro, chapters_json, video_json, sort_order)
      VALUES(?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`
@@ -600,8 +644,8 @@ export function createCourse(db, input) {
     v.out.badge || COURSE_BADGE(v.out.name),
     v.out.color || '#2F78C4',
     v.out.intro || '',
-    v.out.video ? JSON.stringify(v.out.video) : null,
-    v.out.sort_order || 0
+    v.out.video ? JSON.stringify(v.out.video) : 'null',
+    sortOrder
   );
   return { ok: true, course: getCourseMeta(db).find((c) => c.id === id) };
 }
@@ -626,7 +670,8 @@ export function updateCourse(db, id, patch) {
   if (next.name !== current.name && courseNameTaken(db, next.name, id)) {
     return { ok: false, errors: ['课程名称已存在'] };
   }
-  const videoJson = patch.video !== undefined ? (v.out.video ? JSON.stringify(v.out.video) : null) : current.video_json;
+  // JSON.stringify(null) === "null": a deliberate removal, distinct from SQL NULL (fallback to seed).
+  const videoJson = patch.video !== undefined ? JSON.stringify(v.out.video) : current.video_json;
 
   db.exec('BEGIN');
   try {

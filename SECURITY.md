@@ -41,9 +41,10 @@ You can expect an initial response within a reasonable time for a volunteer-main
 - Session cookie is `HttpOnly`, `SameSite=Lax`, `Path=/`, 7-day expiry, and `Secure` when the request is HTTPS.
 - Login and registration are rate-limited per IP.
 - Mutating requests with a cross-site `Origin` are rejected.
-- Admin-only checks on record writes, CSV import/export, user management, and course management.
+- Admin-only checks on record reads/writes, CSV import/export, user management, and course management. Public pages expose only aggregated course/dashboard data.
 - The last active admin cannot be demoted or disabled; an admin cannot demote or disable themselves.
-- Deactivating a user deletes their sessions.
+- Deactivating a user deletes their sessions; resetting a password revokes all other sessions (the current session is kept when an admin changes their own password).
+- Bootstrap admin credentials are validated (valid email, password at least 8 characters).
 - Parameterized SQL for all queries.
 - CSV import validation before replacing records, inside a transaction.
 - HTML escaping for all dynamic text rendered by the frontend.

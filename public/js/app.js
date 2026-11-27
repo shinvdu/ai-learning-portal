@@ -1300,7 +1300,12 @@ function bindDemoPanel({ refreshDashboard, catalog }) {
 async function viewDashboard(args, params) {
   let filter = params.get('course') || '';
   let d = await api(`/api/dashboard${filter ? `?course=${encodeURIComponent(filter)}` : ''}`);
-  if (filter && !d.courseOptions.includes(filter)) filter = '';
+  if (filter && !d.courseOptions.includes(filter)) {
+    // The selected course was renamed or deleted; reload the full dashboard.
+    filter = '';
+    history.replaceState(null, '', '#/dashboard');
+    d = await api('/api/dashboard');
+  }
 
   app.innerHTML = `
     <header class="page-head">
@@ -1523,7 +1528,7 @@ function authPage({ register = false } = {}) {
           <li>课程管理：课程信息、章节、视频</li>
           <li>编辑学习记录、导入/导出 CSV、恢复初始数据</li>
         </ul>
-        <p class="side-note">管理员账号由部署环境初始化；如忘记密码，可在服务器日志或数据库中重置。</p>
+        <p class="side-note">管理员账号由部署环境初始化；如忘记密码，可用 <code>npm run admin:reset</code> 重置。</p>
       </aside>
     </section>`;
 
@@ -1838,6 +1843,7 @@ async function viewAdminCourse(args) {
   }
   const video = course?.video ?? {};
   const chapters = course?.chapterDetails ?? [];
+  const nextSort = Math.max(0, ...data.courses.map((c) => Number(c.sort_order) || 0)) + 1;
 
   app.innerHTML = `
     <nav class="crumbs"><a href="#/admin">管理后台</a><span>/</span><span>${isNew ? '新建课程' : esc(course.name)}</span></nav>
@@ -1863,7 +1869,9 @@ async function viewAdminCourse(args) {
           <label>难度<input name="level" maxlength="40" value="${esc(course?.level ?? '入门')}"></label>
           <label>短标签<input name="badge" maxlength="8" value="${esc(course?.badge ?? '')}"></label>
           <label>主题色<input name="color" type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(course?.color ?? '') ? course.color : '#2F78C4')}"></label>
-          <label>排序<input name="sort_order" type="number" step="1" value="${Number(course?.sort_order ?? 0)}"></label>
+          <label>排序<input name="sort_order" type="number" step="1" value="${Number(
+            course?.sort_order ?? (isNew ? nextSort : 0)
+          )}"></label>
           <label class="span-2">简介<textarea name="intro" rows="3" maxlength="500">${esc(course?.intro ?? '')}</textarea></label>
         </div>
         <h3>课程视频</h3>

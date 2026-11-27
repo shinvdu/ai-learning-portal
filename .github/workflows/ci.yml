@@ -62,6 +62,8 @@ jobs:
             -d '{"student_id":"S999","course_name":"生成式 AI 基础","learning_date":"2026-11-20","learning_minutes":30,"chapters_done":1,"total_chapters":6}' \
             http://127.0.0.1:8787/api/records)
           test "$status" = "401"
+          status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/records)
+          test "$status" = "401"
 
           # Admin login and user list.
           curl -fsS -c /tmp/admin-cookies.txt -H 'Content-Type: application/json' \
@@ -70,6 +72,8 @@ jobs:
           grep -q '"role":"admin"' /tmp/login.json
           curl -fsS -b /tmp/admin-cookies.txt http://127.0.0.1:8787/api/admin/users > /tmp/users.json
           grep -q 'admin@ci.test' /tmp/users.json
+          curl -fsS -b /tmp/admin-cookies.txt http://127.0.0.1:8787/api/records?limit=1 > /tmp/records.json
+          grep -q '"rows"' /tmp/records.json
 
           # Learner registration and authorization boundary.
           email="ci-$(date +%s)@test.local"

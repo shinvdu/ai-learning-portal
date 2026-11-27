@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-11-28
+
+### Fixed
+
+- Password resets now revoke all of the target user's other sessions; an admin changing their own password keeps the current session.
+- Removing a course video in the admin UI now actually removes it on the public course page (previously it fell back to the seed video).
+- Seed flags for catalog and chapters prevent intentionally deleted courses/chapters from being recreated on restart.
+- CSV/API date validation rejects impossible calendar dates such as `2026-02-31`.
+- Admin media URLs are restricted to same-origin paths (no `javascript:`, protocol-relative, or traversal URLs).
+- Course IDs are monotonic (deleting the newest course no longer reuses its ID), and course ordering uses numeric IDs.
+- New courses default to the end of the catalog instead of sharing sort order 0.
+- Dashboard ignores a stale `?course=` filter after a course is renamed/deleted and reloads the full dataset.
+- Malformed request URLs return 400 instead of throwing.
+- Login/register rate-limit buckets reset after success.
+- Logout clears the session cookie with the same `Secure` attribute as login.
+- Bootstrap admin email/password validation is enforced (password ≥ 8 characters).
+- Added `npm run admin:reset` for resetting a locked-out administrator and revoking their sessions.
+
 ## [1.1.0] - 2026-11-28
 
 ### Added
