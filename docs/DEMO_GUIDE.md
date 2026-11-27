@@ -31,11 +31,12 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 ```
 
 1. Open `#/login`, sign in with the admin account.
-2. Open `管理后台` in the header.
-3. **Users**: create a learner, switch a role, disable an account, or reset a password. Show that the last active admin cannot be demoted or disabled.
-4. **Courses**: edit a course name/color/video, add a chapter, edit its body, then open the public course page and chapter page to see the change.
-5. Back on `#/dashboard`, expand the data playground and edit a record.
-6. `#/register` creates a normal learner. A learner can browse public pages but cannot see the admin area or edit data.
+2. Open `#/account`: enable MFA with an authenticator, save recovery codes, then open `管理后台`.
+3. **Users**: create a learner, switch a role, disable an account, reset a password/MFA, unlock a locked account. Show that the last active admin cannot be demoted or disabled.
+4. **审计**: scroll to the audit panel and show recent login/admin/data events.
+5. **Courses**: edit a course name/color/video, add a chapter, edit its body, then open the public course page and chapter page to see the change.
+6. Back on `#/dashboard`, expand the data playground and edit a record.
+7. `#/register` creates a normal learner. A learner can browse public pages but cannot see the admin area or edit data.
 
 ## Live data playground
 

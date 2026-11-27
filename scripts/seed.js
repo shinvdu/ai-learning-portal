@@ -7,6 +7,11 @@
 import { openDb, resetRecords } from '../src/db.js';
 import path from 'node:path';
 
+if ((process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production') && process.env.FORCE_SEED !== '1') {
+  console.error('生产环境拒绝导入示例学习记录；如确需演示，设置 FORCE_SEED=1。');
+  process.exit(1);
+}
+
 const db = openDb();
 const res = resetRecords(db);
 if (res.ok) {

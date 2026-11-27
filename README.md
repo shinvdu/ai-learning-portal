@@ -2,7 +2,7 @@
 
 **AI 学习与数据分析门户** —— 一个零依赖、可直接运行的 Node.js + SQLite 教学演示项目。
 
-[English](README.en.md) · [架构文档](docs/ARCHITECTURE.md) · [演示指南](docs/DEMO_GUIDE.md) · [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
+[English](README.en.md) · [架构文档](docs/ARCHITECTURE.md) · [部署指南](docs/DEPLOYMENT.md) · [生产化路线](docs/PRODUCTION_READINESS.md) · [演示指南](docs/DEMO_GUIDE.md) · [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?logo=node.js&logoColor=white)](#快速开始)
 [![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=white)](#技术栈)
@@ -13,7 +13,7 @@
 
 覆盖 **课程广场、课程详情、知识中心、学习看板、数据洞察** 五个模块，并额外提供章节页、登录注册、管理员后台（用户 / 课程 / 章节）与管理员数据演示面板。所有 KPI 都由 SQLite 中的原始学习记录计算——改一条数据，指标与图表立即变化。
 
-> 这是一个演示/模板项目：数据与课程内容均为模拟内容，包含会话登录与管理员后台，但**没有邮箱验证、找回密码、MFA 等生产级能力，不适合直接当作生产系统使用**。
+> 这是一个演示/参考实现：示例数据与课程内容为模拟内容。现已包含邮箱验证、密码重置、MFA、审计、账号锁定、CSRF、版本化 migration 与备份，可作为**单节点受控生产**的基础；但仍缺少 PostgreSQL/Redis 多实例、SSO、多租户、审计保留与完整合规能力，不应直接当作公网 SaaS。
 
 > Live demo（早期部署，可能落后于 main）：https://77fpveqc.qwenwork.host/
 
@@ -49,8 +49,12 @@
 - **知识中心**：每门课一套 200 字摘要、学习目标、5 个知识点、5 个术语、3 条 FAQ、3 道带答案解析的测验、原文摘录、AI 初稿 → 人工修正对照。
 - **学习看板**：5 个 KPI、6 张纯 SVG 图表、课程筛选、数据源状态。
 - **数据洞察**：由数据动态生成的洞察、指标公式表、常见口径误区。
-- **登录与注册**：邮箱 + 密码注册/登录/退出，scrypt 密码哈希，HttpOnly 会话 Cookie。
-- **用户管理（管理员）**：列表、创建用户、调整角色、启停账号、修改密码；保护最后一个管理员。
+- **登录与注册**：邮箱 + 密码注册/登录/退出，scrypt 密码哈希，HttpOnly 会话 Cookie；生产模式要求邮箱验证。
+- **密码找回**：忘记密码邮件、单次重置令牌、重置后撤销全部旧会话。
+- **MFA**：TOTP + 8 枚一次性恢复码，可在账号页启用/停用；管理员可重置用户 MFA。
+- **账号锁定**：连续失败按账号锁定 15 分钟，管理员可解锁。
+- **审计日志**：登录、密码、MFA、角色、课程/章节、记录与 CSV 操作为管理员留存。
+- **用户管理（管理员）**：列表、创建用户、调整角色、启停账号、修改密码、标记邮箱验证、解锁；保护最后一个管理员。
 - **课程管理（管理员）**：课程信息、主题色、视频、排序；章节新增/编辑/删除；课程名称变更自动同步学习记录。
 - **数据演示面板（管理员）**：编辑 / 新增 / 删除记录，导入 / 导出 CSV，恢复初始数据；每次变更后全部指标重新计算。
 - **零依赖、零构建**：不需要 `npm install`，离线可用；图表不依赖 CDN。
@@ -78,8 +82,23 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 ```
 
 如果没有设置 `ADMIN_PASSWORD`，程序会生成随机密码并打印在启动日志中（只打印一次）。
+- 开发/演示模式（默认）注册后自动登录；`APP_ENV=production` 时新用户必须完成邮箱验证。
 - 普通用户可以自行注册；管理员登录后从右上角“管理后台”进入用户与课程管理。
 - 局域网演示：`HOST=0.0.0.0 npm start`，访问 `http://<本机IP>:8787`。请只在可信网络内使用。
+
+**受控生产部署（单节点）**：见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。最小配置：
+
+```bash
+APP_ENV=production \
+PUBLIC_BASE_URL=https://learning.example.com \
+MAIL_WEBHOOK_URL=https://mail-relay.example.com/send \
+MAIL_WEBHOOK_TOKEN='...' \
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='a-long-random-password' \
+PORTAL_DB=/var/lib/ai-learning-portal/portal.db \
+HOST=127.0.0.1 npm start
+```
+
+生产模式不会导入示例学习记录，要求配置邮件网关，并要求显式管理员密码。
 
 ## 页面与截图
 
@@ -92,7 +111,10 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 | `#/dashboard` | 学习看板 |
 | `#/insights` | 数据洞察 |
 | `#/login` / `#/register` | 登录 / 注册 |
-| `#/admin` | 管理后台（用户、课程） |
+| `#/forgot` / `#/reset?token=` | 忘记密码 / 重置密码 |
+| `#/verify?token=` | 邮箱验证 |
+| `#/account` | 账号设置（密码、MFA、验证状态） |
+| `#/admin` | 管理后台（用户、课程、审计） |
 | `#/admin/course/C3` | 课程与章节编辑（管理员） |
 
 | 学习看板（管理员，含数据面板） | 章节页 |
@@ -100,8 +122,10 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 | ![学习看板](docs/screenshots/dashboard.jpg) | ![章节页](docs/screenshots/chapter.jpg) |
 | **知识中心** | **移动端** |
 | ![知识中心](docs/screenshots/knowledge.jpg) | <img src="docs/screenshots/mobile.jpg" alt="移动端首页" width="260"> |
-| **登录** | **管理后台** |
+| **登录** | **管理后台（含审计）** |
 | ![登录](docs/screenshots/login.jpg) | ![管理后台](docs/screenshots/admin.jpg) |
+
+**账号设置（密码 / MFA）**：<img src="docs/screenshots/account.jpg" alt="账号设置与 MFA" width="720">
 
 ## 技术栈
 
@@ -113,7 +137,8 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
 | 图表 | 手写 SVG | 离线可用，不依赖 ECharts / CDN |
 | 样式 | 原生 CSS + 自定义属性 | 深海军蓝 / 青绿色视觉系统，响应式 |
 | 视频 | ffmpeg 生成的 8 秒 MP4 | 统一示例视频，支持 HTTP Range |
-| 认证 | `node:crypto` scrypt + SQLite 会话 | HttpOnly / SameSite Cookie，无第三方库 |
+| 认证 | scrypt + SQLite 会话 + TOTP | HttpOnly / SameSite Cookie、一次性令牌、审计 |
+| 运维 | 版本化 SQLite migration + `VACUUM INTO` 备份 | 单节点最小生产形态 |
 | 测试 | `scripts/verify.js` | 指标口径、内容完整性、资源校验（临时数据库） |
 
 ## 为什么不用 Vue / 构建工具
@@ -166,12 +191,20 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/auth/me` | 当前登录用户（未登录为 `null`） |
-| POST | `/api/auth/register` | 注册普通用户并建立会话 |
-| POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/register` | 注册；开发模式自动登录，生产模式需邮箱验证 |
+| POST | `/api/auth/login` | 登录（可能返回 `mfaRequired` + 挑战令牌） |
+| POST | `/api/auth/mfa` | 使用挑战令牌 + TOTP/恢复码完成登录 |
+| POST | `/api/auth/verify-email` | 消费验证令牌并建立会话 |
+| POST | `/api/auth/resend-verification` | 重发验证邮件 |
+| POST | `/api/auth/forgot-password` | 发送重置邮件（响应不泄露账号是否存在） |
+| POST | `/api/auth/reset-password` | 消费重置令牌；撤销全部会话 |
+| POST | `/api/auth/change-password` | 已登录用户修改密码（撤销其他会话） |
+| POST | `/api/auth/mfa/setup` / `enable` / `disable` | 账号页 MFA 自助管理 |
 | POST | `/api/auth/logout` | 退出并清除会话 |
 | GET | `/api/admin/users` | 用户列表（管理员） |
 | POST | `/api/admin/users` | 创建用户（管理员） |
-| PATCH | `/api/admin/users/:id` | 角色 / 启停 / 密码（管理员） |
+| PATCH | `/api/admin/users/:id` | 角色 / 启停 / 密码 / 解锁 / 重置 MFA / 标记已验证（管理员） |
+| GET | `/api/admin/audit?limit=&offset=&action=` | 审计日志（管理员） |
 | GET | `/api/admin/courses` | 课程与章节详情（管理员） |
 | POST | `/api/admin/courses` | 创建课程（管理员） |
 | PATCH | `/api/admin/courses/:id` | 修改课程信息 / 视频（管理员） |
@@ -204,9 +237,16 @@ S003,Python 数据分析,2026-11-04,79,2,8,
 |---|---|---|
 | `PORT` | `8787` | 监听端口 |
 | `HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 允许局域网访问 |
+| `TRUST_PROXY` | 生产自动 `1` | 信任 `X-Forwarded-For/Proto`（仅置于可信代理后） |
 | `PORTAL_DB` | `data/portal.db` | 指定 SQLite 数据库文件 |
+| `APP_ENV` | `development` | `production` 时要求邮箱验证、禁止生成/打印管理员密码 |
+| `PUBLIC_BASE_URL` | `http://localhost:8787` | 验证/重置邮件链接的站点地址（生产必填） |
+| `MAIL_WEBHOOK_URL` | 无 | 邮件网关地址（生产必填） |
+| `MAIL_WEBHOOK_TOKEN` | 无 | 邮件网关 Bearer Token |
+| `MAIL_FROM` | `no-reply@...local` | 发件人 |
+| `SEED_DEMO_RECORDS` | 生产 `0` / 开发 `1` | `0` 跳过示例学习记录 |
 | `ADMIN_EMAIL` | `admin@local.test` | 首次创建管理员时使用的邮箱 |
-| `ADMIN_PASSWORD` | 自动生成并打印 | 首次创建管理员时使用的密码（至少 8 字符） |
+| `ADMIN_PASSWORD` | 开发自动生成并打印；生产必填 | 首次创建管理员时使用的密码（至少 8 字符） |
 
 管理员只在“没有启用中的管理员”时自动创建；之后请通过管理后台维护账号。
 
@@ -219,10 +259,12 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='new-strong-password' npm run admin
 ## 开发与测试
 
 ```bash
-npm run dev      # node --watch，修改后端代码自动重启
-npm run seed     # 恢复 data/learning_records.csv（清空手工修改）
-npm run verify   # 在临时数据库中校验指标、内容、章节、视频资源
-npm test         # 同 verify
+npm run dev          # node --watch，修改后端代码自动重启
+npm run seed         # 恢复 data/learning_records.csv（清空手工修改）
+npm run backup       # VACUUM INTO 一致性备份到 backups/
+npm run admin:reset  # 重置/创建管理员并撤销其会话
+npm run verify       # 在临时数据库中校验指标、内容、章节、视频资源
+npm test             # 同 verify
 ```
 
 > `verify` 使用临时数据库，不会修改 `data/portal.db`；`seed` 会重置学习记录（不修改管理员与课程）。
@@ -246,29 +288,36 @@ export const CHAPTER_VIDEOS = {
 
 ## 部署
 
-这是一个单进程 Node.js 应用：
+生产部署请使用 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**，其中包含：
+
+- `APP_ENV=production` 必需环境变量（邮件网关、`PUBLIC_BASE_URL`、管理员密码）。
+- Nginx TLS/HSTS/限流示例与 systemd 单元。
+- 版本化 SQLite migration、`npm run backup` 与恢复步骤。
+- 健康检查 `/healthz`、`/readyz`。
+- 单节点限制与何时需要 PostgreSQL/Redis。
+
+快速本机启动：
 
 ```bash
-ADMIN_EMAIL=admin@example.com \
-ADMIN_PASSWORD='change-me-please' \
-HOST=0.0.0.0 PORT=8787 PORTAL_DB=/var/lib/ai-portal/portal.db \
-npm start
+APP_ENV=development npm start
 ```
 
-- 建议放在 Nginx / Caddy 等反向代理之后，并启用 HTTPS；应用会根据 `X-Forwarded-Proto: https` 给会话 Cookie 加 `Secure`。
-- `data/portal.db` 是唯一持久化数据（含用户、会话、课程、记录），注意备份。
-- 静态资源与视频由同一进程提供，支持 HTTP Range。
+生产环境必须放在 Nginx/Caddy 等反向代理之后启用 HTTPS；应用会根据 `X-Forwarded-Proto: https` 给会话与 CSRF Cookie 加 `Secure`。静态资源与视频由同一进程提供，支持 HTTP Range。
 
 ## 安全说明
 
-- **认证是演示级实现**：scrypt 密码哈希、SQLite 会话、HttpOnly + SameSite=Lax Cookie、7 天有效期；登录/注册按 IP 限流。
-- **权限**：普通用户只能读取公开页面；学习记录写入、CSV 导入/导出、用户管理与课程管理均要求管理员。
-- 管理员由环境变量引导创建；请设置强 `ADMIN_PASSWORD` 并登录后修改。保护最后一个启用中的管理员账号（不能自我降级/停用）。
-- 写接口校验同源 `Origin`，降低 CSRF 风险；所有 SQL 使用参数绑定；CSV 导入先校验后整表替换。
-- 响应头包含 CSP（禁止内联脚本）、`X-Frame-Options`、`nosniff`、`Referrer-Policy`；请求体限制 2MB。
+- **认证**：scrypt 密码哈希、SQLite 会话、HttpOnly + SameSite=Lax Cookie、7 天有效期、按 IP 限流。
+- **邮箱验证 / 密码重置**：一次性令牌（数据库只存哈希）、过期时间；重置后撤销全部旧会话。
+- **MFA**：TOTP + 8 枚一次性恢复码；启用 MFA 时撤销其他密码会话；管理员可重置 MFA。
+- **账号锁定**：按账号统计连续失败，5 次锁定 15 分钟；管理员可解锁。
+- **CSRF**：SameSite + 同源 Origin 校验 + 双提交 Cookie（`aip_csrf` + `X-CSRF-Token`）。
+- **权限**：公开页面只读聚合数据；原始学习记录、CSV 导入/导出、用户/课程管理、审计日志均要求管理员。
+- **审计**：登录、密码、MFA、角色、课程/章节、记录与 CSV 操作写入 `audit_log`，管理后台可查看最近记录。
+- 管理员由环境变量引导创建；生产模式要求显式强密码，不打印生成密码。保护最后一个启用中的管理员。
+- 版本化 migration、`VACUUM INTO` 备份脚本、`/healthz` 与 `/readyz`。
+- 响应头包含 CSP（禁止内联脚本/对象/iframe）、COOP/CORP、`X-Frame-Options`、`nosniff`、`Referrer-Policy`；请求体限制 2MB。
 - 前端所有动态文本经 HTML 转义；视频使用本地资源。
-- 仅使用模拟数据；不要写入真实姓名、联系方式、成绩或公司数据。
-- 没有邮箱验证、找回密码邮件、MFA、审计日志与多租户隔离。公开部署前请评估并补齐。详见 [SECURITY.md](SECURITY.md)。
+- **仍未内置**：邮件供应商 SMTP（通过 `MAIL_WEBHOOK_URL` 适配）、PostgreSQL、Redis 会话/限流、审计保留策略、多租户、完整 CSP nonce（当前样式仍需 `unsafe-inline`）。详见 [SECURITY.md](SECURITY.md)。
 
 ## 项目结构
 
@@ -278,7 +327,10 @@ npm start
 ├── src/
 │   ├── db.js                  # SQLite 建表、种子导入、校验、CRUD、CSV 导入
 │   ├── analytics.js           # KPI、分课程统计、图表数据、动态洞察、章节推断
-│   ├── auth.js                # 密码哈希、会话、管理员引导
+│   ├── auth.js                # 密码哈希、会话、一次性令牌、管理员引导
+│   ├── migrations.js          # 版本化 SQLite migration
+│   ├── mailer.js              # 邮件 webhook / 开发控制台适配
+│   ├── totp.js                # TOTP、恢复码
 │   ├── content.js             # 课程目录、知识内容、视频配置（初始种子）
 │   └── csv.js                 # 无依赖 CSV 解析 / 导出
 ├── public/
@@ -293,10 +345,16 @@ npm start
 │   └── portal.db              # 运行时生成（gitignored）
 ├── scripts/
 │   ├── seed.js
+│   ├── backup.js
 │   ├── reset-admin.js
 │   └── verify.js
+├── deploy/
+│   ├── nginx.conf.example
+│   └── ai-learning-portal.service
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── DEPLOYMENT.md
+│   ├── PRODUCTION_READINESS.md
 │   ├── DEMO_GUIDE.md
 │   └── screenshots/
 └── .github/workflows/ci.yml
@@ -304,7 +362,11 @@ npm start
 
 ## 已知限制
 
-- 认证为演示级：无邮箱验证、找回密码邮件、MFA、审计日志、多租户与细粒度权限。
+- 最小生产形态为单节点 SQLite：无 PostgreSQL、Redis 会话/限流、多实例水平扩展。
+- 邮件通过 `MAIL_WEBHOOK_URL` 适配外部网关，未内置 SMTP 客户端；需自行配置 SPF/DKIM/DMARC。
+- 审计日志有写入与后台查看，但无保留/归档策略与导出。
+- 无 SSO/SCIM、多租户、细粒度资源权限；MFA 目前为可选，未强制管理员开启。
+- CSP 仍允许 `style-src 'unsafe-inline'`（大量内联样式），尚未改为 nonce/hash。
 - 章节到达率是推断值，原始数据没有逐章记录。
 - 单进程 SQLite，每次请求全量计算 177 条记录；真实数据量需要增量查询与缓存。
 - CSV 导入是整表替换，不支持增量合并。

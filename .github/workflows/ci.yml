@@ -37,6 +37,7 @@ jobs:
 
       - name: Server smoke test
         env:
+          APP_ENV: development
           PORTAL_DB: /tmp/ci-portal.db
           ADMIN_EMAIL: admin@ci.test
           ADMIN_PASSWORD: ci-admin-password
@@ -56,6 +57,15 @@ jobs:
 
           test -s /tmp/meta.json
           curl -fsS http://127.0.0.1:8787/ > /dev/null
+          curl -fsS http://127.0.0.1:8787/healthz > /dev/null
+          curl -fsS http://127.0.0.1:8787/readyz > /dev/null
+
+          # A browser-origin mutation without the CSRF header must be rejected.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://127.0.0.1:8787' \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@ci.test","password":"ci-admin-password"}' \
+            http://127.0.0.1:8787/api/auth/login)
+          test "$status" = "403"
 
           # Anonymous writes must be rejected.
           status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
@@ -74,6 +84,8 @@ jobs:
           grep -q 'admin@ci.test' /tmp/users.json
           curl -fsS -b /tmp/admin-cookies.txt http://127.0.0.1:8787/api/records?limit=1 > /tmp/records.json
           grep -q '"rows"' /tmp/records.json
+          curl -fsS -b /tmp/admin-cookies.txt http://127.0.0.1:8787/api/admin/audit?limit=5 > /tmp/audit.json
+          grep -q '"rows"' /tmp/audit.json
 
           # Learner registration and authorization boundary.
           email="ci-$(date +%s)@test.local"

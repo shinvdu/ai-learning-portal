@@ -43,12 +43,13 @@ The server is a single process. Static files and the API are served from the sam
 ## Startup sequence
 
 1. `openDb()` creates `data/portal.db` if missing.
-2. Schema is created with `CREATE TABLE IF NOT EXISTS`; lightweight migrations add new columns.
-3. If the `courses` table is empty, `syncCatalog()` imports the initial courses and knowledge documents from `src/content.js`.
-4. `syncChapters()` parses `data/lectures/*.txt` for courses that do not have chapters yet.
-5. If the `records` table is empty, `resetRecords()` imports `data/learning_records.csv`.
-6. `ensureAdminUser()` creates one admin account when no active admin exists. `ADMIN_EMAIL` / `ADMIN_PASSWORD` control it; otherwise a random password is generated and printed once.
-7. `server.js` starts listening on `PORT` / `HOST`.
+2. Base schema is created idempotently; `runMigrations()` records baseline version 1 and applies additive migrations (`schema_migrations`).
+3. If the `courses` table is empty, `syncCatalog()` imports the initial courses and knowledge documents from `src/content.js` (guarded by a one-time seed flag).
+4. `syncChapters()` parses `data/lectures/*.txt` for courses that do not have chapters yet (one-time flags per course).
+5. If the `records` table is empty **and** demo seeding is enabled, `resetRecords()` imports `data/learning_records.csv`. `APP_ENV=production` and `SEED_DEMO_RECORDS=0` skip this.
+6. `ensureAdminUser()` creates one admin account when no active admin exists. Production requires `ADMIN_PASSWORD`; development may generate one and print it once.
+7. Expired sessions and one-time auth tokens are purged.
+8. `server.js` starts listening on `PORT` / `HOST`.
 
 After the first run, the database is the source of truth for courses, chapters, users, and knowledge documents. Content-only changes in `src/content.js` no longer overwrite admin edits. Course/chapter changes made in the admin UI persist across restarts.
 
@@ -118,6 +119,11 @@ Courses created in the admin UI have no knowledge document; the knowledge center
 | `password_hash` | TEXT | `scrypt$salt$hash` (base64url) |
 | `role` | TEXT | `admin` or `learner` |
 | `active` | INTEGER | 0 disables login and deletes sessions |
+| `email_verified` | INTEGER | 1 for existing/admin-created users; production registrations start at 0 |
+| `failed_attempts` | INTEGER | Resets on successful login; 5 failures lock the account |
+| `locked_until` | INTEGER | Epoch ms, 15-minute lockout |
+| `mfa_secret` | TEXT | Base32 TOTP secret (null when MFA disabled) |
+| `mfa_enabled` | INTEGER | 1 when MFA is active |
 | `created_at` | TEXT | |
 | `last_login_at` | TEXT | |
 
@@ -130,9 +136,49 @@ Courses created in the admin UI have no knowledge document; the knowledge center
 | `expires_at` | INTEGER | Epoch milliseconds, 7 days |
 | `created_at` | TEXT | |
 
+### `auth_tokens`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | SHA-256 of the raw token |
+| `user_id` | INTEGER | FK to `users` |
+| `type` | TEXT | `verify`, `reset`, or `mfa` challenge |
+| `expires_at` | INTEGER | Epoch ms (24h / 1h / 5min) |
+| `used_at` | TEXT | Single-use marker |
+| `created_at` | TEXT | |
+
+### `mfa_recovery_codes`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `user_id` | INTEGER | FK to `users` |
+| `code_hash` | TEXT | SHA-256 of the normalized code |
+| `used_at` | TEXT | Consumed once |
+
+### `audit_log`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `created_at` | TEXT | |
+| `actor_user_id` / `actor_email` | INTEGER / TEXT | Null for anonymous login attempts |
+| `action` | TEXT | e.g. `auth.login`, `admin.course_updated`, `data.csv_exported` |
+| `target_type` / `target_id` | TEXT | Course, chapter, user, record, dataset… |
+| `ip` | TEXT | Remote address |
+| `details_json` | TEXT | Non-sensitive context |
+
+### `schema_migrations`
+
+| Column | Type | Notes |
+|---|---|---|
+| `version` | INTEGER PK | Version 1 is the baseline; 2 adds auth hardening |
+| `name` | TEXT | |
+| `applied_at` | TEXT | |
+
 ### `meta`
 
-Key/value store for dataset state: source, last update, seed import time, manual edit count.
+Key/value store for dataset state: source, last update, seed import time, manual edit count, seed flags, course sequence.
 
 ## Metric definitions
 
@@ -209,11 +255,16 @@ Consequences:
 - Sessions: 256-bit random token in an `HttpOnly`, `SameSite=Lax`, 7-day cookie (`aip_session`). Only the SHA-256 digest is stored in `sessions`.
 - The cookie adds `Secure` when `X-Forwarded-Proto: https` or the socket is TLS.
 - `GET /api/auth/me` resolves the cookie on every request; expired or inactive-user sessions are deleted.
-- Registration creates an active `learner`. Login and registration are rate-limited per IP (in-memory, fixed window).
-- Mutating requests with a cross-site `Origin` are rejected.
-- Admin bootstrap: when no active admin exists, create one from `ADMIN_EMAIL` / `ADMIN_PASSWORD`, or generate a random password and print it once.
+- Registration creates an active `learner`. In development it auto-verifies and logs in; in production it issues a 24h verification token and sends a link through the mail webhook. Unverified logins return `EMAIL_UNVERIFIED`.
+- Password reset issues a 1h single-use token, stores only its SHA-256 digest, revokes all sessions on success, and marks the email verified (the link proves mailbox control).
+- MFA: TOTP (RFC 6238, SHA-1, 6 digits, 30s, ±1 window) with 8 one-time recovery codes. Login returns `mfaRequired` + a 5-minute challenge token; `/api/auth/mfa` exchanges it for a session. Enabling MFA revokes other password-only sessions.
+- Lockout: 5 failed password or MFA attempts lock the account for 15 minutes; admins can unlock.
+- Login/registration/MFA/verification/reset endpoints are rate-limited per IP (in-memory; use proxy limits in multi-instance).
+- Mutating requests require a same-site `Origin` and a CSRF double-submit token (`aip_csrf` cookie + `X-CSRF-Token`).
+- Admin bootstrap: when no active admin exists, create one from `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Production requires `ADMIN_PASSWORD`; development may generate and print one.
 - Admin constraints: the last active admin cannot be demoted or disabled; an admin cannot demote or disable their own account. Disabling a user deletes their sessions.
-- Authorization: public aggregates (courses, chapters, knowledge, dashboard, insights) need no session. Both reading and writing raw learning records, CSV import/export, and all `/api/admin/*` routes require `role = admin`.
+- Audit events are written for auth, role/password/MFA changes, course/chapter edits, raw record CRUD, CSV import/export, and reset. Details exclude passwords/tokens.
+- Authorization: public aggregates (courses, chapters, knowledge, dashboard, insights) need no session. Both reading and writing raw learning records, CSV import/export, admin user/course management, and audit access require `role = admin`.
 - Admin course deletion refuses to remove a course that still has learning records unless `force=1`; force deletes the course and its records in one transaction. Renaming a course updates `records.course_name` in the same transaction.
 
 ## API design
@@ -231,10 +282,11 @@ See the API table in the README for the route list.
 
 - `public/index.html` is a shell: header, nav, `<main>`, footer.
 - `public/js/app.js` contains:
-  - hash router (`#/home`, `#/course/:id`, `#/chapter/:courseId/:idx`, `#/knowledge/:id`, `#/dashboard`, `#/insights`, `#/login`, `#/register`, `#/admin`, `#/admin/course/:id`),
+  - hash router (`#/home`, `#/course/:id`, `#/chapter/:courseId/:idx`, `#/knowledge/:id`, `#/dashboard`, `#/insights`, `#/login`, `#/register`, `#/forgot`, `#/reset`, `#/verify`, `#/account`, `#/admin`, `#/admin/course/:id`),
   - view renderers using template strings,
   - quiz state and scoring,
-  - the admin user/course/chapter editors,
+  - MFA challenge, verification, password-reset and account flows,
+  - the admin user/course/chapter editors and audit log,
   - the admin-only data playground.
 - `public/js/charts.js` generates SVG for column, horizontal bar, and line charts. `compact` mode switches to a smaller viewBox and fewer labels on narrow screens.
 - All dynamic content is escaped with a small `esc()` helper before insertion.
@@ -266,7 +318,7 @@ Six public views plus login, registration, and an admin area, with no build step
 
 ## Testing
 
-`npm run verify` creates a temporary SQLite database (it does not touch `data/portal.db`) and checks:
+`npm run verify` creates a temporary SQLite database (it does not touch `data/portal.db`), applies migrations, and checks:
 
 - overall and per-course reference values,
 - knowledge completeness and quiz validity,
@@ -278,13 +330,15 @@ CI additionally syntax-checks ES modules and performs a server smoke test.
 
 ## Security model
 
-This is a demo with basic, self-contained authentication:
+This is a single-node controlled-production baseline with self-contained authentication:
 
 - scrypt password hashes, hashed session tokens, HttpOnly/SameSite cookies,
-- admin/learner roles; raw record access and admin routes require admin,
-- rate limiting on login/register, same-origin checks on mutations,
-- simulated data only,
-- CSP disallows inline scripts; dynamic text is escaped,
+- email verification, password reset, TOTP MFA, recovery codes, per-account lockout,
+- admin/learner roles; raw record access, admin routes, and audit access require admin,
+- rate limiting on auth endpoints, CSRF double-submit + same-origin checks,
+- audit log for security and data changes,
+- versioned migrations, `VACUUM INTO` backups, health endpoints,
+- CSP disallows inline scripts/objects/frames; dynamic text is escaped,
 - SQL is parameterized; CSV imports are validated and transactional.
 
-It intentionally lacks email verification, password recovery email, MFA, audit logging, and multi-tenancy. For a public deployment, add those plus HTTPS and proxy-level rate limiting.
+It still lacks built-in SMTP (mail webhook only), PostgreSQL/Redis multi-instance operation, SSO/SCIM, multi-tenancy, audit retention/export, and a CSP nonce for inline styles. See [DEPLOYMENT.md](DEPLOYMENT.md) and [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).

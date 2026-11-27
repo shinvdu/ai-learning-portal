@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { COURSES, KNOWLEDGE } from './content.js';
 import { hashPassword, isEmail, normalizeEmail, passwordProblem } from './auth.js';
+import { runMigrations } from './migrations.js';
 import { parseCsv } from './csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -473,11 +474,24 @@ export function getUserAuthByEmail(db, email) {
   return db.prepare('SELECT * FROM users WHERE email = ?').get(normalizeEmail(email)) ?? null;
 }
 
+export function getUserById(db, id) {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id) ?? null;
+}
+
 export function listUsers(db) {
   return db
-    .prepare('SELECT id, email, name, role, active, created_at, last_login_at FROM users ORDER BY id')
+    .prepare(
+      `SELECT id, email, name, role, active, email_verified, mfa_enabled, failed_attempts, locked_until,
+              created_at, last_login_at
+       FROM users ORDER BY id`
+    )
     .all()
-    .map((u) => ({ ...u, active: Boolean(u.active) }));
+    .map((u) => ({
+      ...u,
+      active: Boolean(u.active),
+      email_verified: Boolean(u.email_verified),
+      mfa_enabled: Boolean(u.mfa_enabled)
+    }));
 }
 
 function validateUserInput({ email, name, password, role }, { creating }) {
@@ -503,8 +517,15 @@ export function createUser(db, input) {
     return { ok: false, errors: ['该邮箱已注册'] };
   }
   const result = db
-    .prepare('INSERT INTO users(email, name, password_hash, role, active) VALUES(?, ?, ?, ?, ?)')
-    .run(v.cleanEmail, v.cleanName, hashPassword(input.password), input.role ?? 'learner', input.active === false ? 0 : 1);
+    .prepare('INSERT INTO users(email, name, password_hash, role, active, email_verified) VALUES(?, ?, ?, ?, ?, ?)')
+    .run(
+      v.cleanEmail,
+      v.cleanName,
+      hashPassword(input.password),
+      input.role ?? 'learner',
+      input.active === false ? 0 : 1,
+      input.emailVerified === false ? 0 : 1
+    );
   return { ok: true, user: listUsers(db).find((u) => u.id === Number(result.lastInsertRowid)) };
 }
 
@@ -538,11 +559,122 @@ export function updateUser(db, id, patch, { actingUserId } = {}) {
     id
   );
   if (!next.active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  if (patch.unlock) {
+    db.prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?').run(id);
+  }
+  if (patch.emailVerified === true) {
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(id);
+  }
+  if (patch.resetMfa) {
+    db.prepare('UPDATE users SET mfa_secret = NULL, mfa_enabled = 0 WHERE id = ?').run(id);
+    db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id = ?').run(id);
+  }
   return { ok: true, user: listUsers(db).find((u) => u.id === id) };
 }
 
 export function touchLogin(db, id) {
   db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(id);
+}
+
+const LOCK_AFTER_FAILURES = 5;
+const LOCK_MS = 15 * 60 * 1000;
+
+export function recordLoginFailure(db, id) {
+  db.prepare('UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ?').run(id);
+  const user = db.prepare('SELECT failed_attempts FROM users WHERE id = ?').get(id);
+  if (user && user.failed_attempts >= LOCK_AFTER_FAILURES) {
+    const lockedUntil = Date.now() + LOCK_MS;
+    db.prepare('UPDATE users SET failed_attempts = 0, locked_until = ? WHERE id = ?').run(lockedUntil, id);
+    return lockedUntil;
+  }
+  return null;
+}
+
+export function resetLoginFailures(db, id) {
+  db.prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?').run(id);
+}
+
+export function markEmailVerified(db, id) {
+  db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(id);
+}
+
+export function updatePasswordHash(db, id, hash) {
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, id);
+}
+
+export function setPendingMfaSecret(db, id, secret) {
+  db.prepare('UPDATE users SET mfa_secret = ?, mfa_enabled = 0 WHERE id = ?').run(secret, id);
+}
+
+export function enableMfa(db, id, recoveryHashes) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE users SET mfa_enabled = 1 WHERE id = ?').run(id);
+    db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id = ?').run(id);
+    const stmt = db.prepare('INSERT INTO mfa_recovery_codes(user_id, code_hash) VALUES(?, ?)');
+    for (const hash of recoveryHashes) stmt.run(id, hash);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function disableMfa(db, id) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE users SET mfa_secret = NULL, mfa_enabled = 0 WHERE id = ?').run(id);
+    db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id = ?').run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function consumeRecoveryCode(db, id, codeHash) {
+  const result = db
+    .prepare("UPDATE mfa_recovery_codes SET used_at = datetime('now') WHERE user_id = ? AND code_hash = ? AND used_at IS NULL")
+    .run(id, codeHash);
+  return Number(result.changes) > 0;
+}
+
+export function writeAudit(
+  db,
+  { actorUserId = null, actorEmail = null, action, targetType = null, targetId = null, ip = null, details = null }
+) {
+  db.prepare(
+    `INSERT INTO audit_log(actor_user_id, actor_email, action, target_type, target_id, ip, details_json)
+     VALUES(?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    actorUserId,
+    actorEmail,
+    action,
+    targetType,
+    targetId,
+    ip,
+    details ? JSON.stringify(details) : null
+  );
+}
+
+export function listAudit(db, { limit = 50, offset = 0, action = '' } = {}) {
+  const where = action ? 'WHERE action = ?' : '';
+  const params = action ? [action] : [];
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM audit_log ${where}`).get(...params).n;
+  const lim = Math.min(200, Math.max(1, Number(limit) || 50));
+  const off = Math.max(0, Number(offset) || 0);
+  const rows = db
+    .prepare(
+      `SELECT id, created_at, actor_user_id, actor_email, action, target_type, target_id, ip, details_json
+       FROM audit_log ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, lim, off)
+    .map((r) => ({
+      ...r,
+      details: parseJson(r.details_json),
+      details_json: undefined
+    }));
+  return { total, limit: lim, offset: off, rows };
 }
 
 /* ------------------------------ courses ------------------------------ */
@@ -780,14 +912,21 @@ export function openDb() {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
   ensureColumn(db, 'courses', 'video_json', 'TEXT');
+  runMigrations(db, ensureColumn);
   syncCatalog(db);
   syncChapters(db);
 
+  const production = process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production';
+  const seedDemo =
+    process.env.SEED_DEMO_RECORDS === '1' ||
+    (!production && process.env.SEED_DEMO_RECORDS !== '0');
   const count = db.prepare('SELECT COUNT(*) AS n FROM records').get().n;
-  if (count === 0) {
+  if (count === 0 && seedDemo) {
     const res = resetRecords(db);
     if (!res.ok) throw new Error(`种子数据导入失败：${res.errors.join('；')}`);
     console.log(`[db] 已从 ${path.basename(SEED_CSV)} 导入 ${res.inserted} 条学习记录`);
+  } else if (count === 0 && !seedDemo) {
+    console.log('[db] 已跳过演示学习记录（APP_ENV=production 或 SEED_DEMO_RECORDS=0）');
   }
 
   return db;

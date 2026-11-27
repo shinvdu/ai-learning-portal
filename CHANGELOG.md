@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-28
+
+### Added
+
+- Production email verification with one-time tokens and a `MAIL_WEBHOOK_URL` email adapter.
+- Forgot-password / reset-password flow; reset revokes all sessions and verifies mailbox control.
+- TOTP MFA with one-time recovery codes, self-service account page, and admin MFA reset.
+- Per-account lockout after five failed password/MFA attempts, with admin unlock.
+- Audit log and admin viewer for authentication, users, courses/chapters, records, CSV import/export, and reset.
+- CSRF double-submit cookie and `X-CSRF-Token` validation alongside the existing origin check.
+- Versioned SQLite migrations (`schema_migrations`).
+- `npm run backup` using `VACUUM INTO`, plus restore/deployment documentation.
+- Production mode (`APP_ENV=production`) with demo-record suppression, mandatory mail/admin configuration, and no generated-password logging.
+- Health endpoints (`/healthz`, `/readyz`), Nginx and systemd examples.
+- `npm run admin:reset` for locked-out administrator recovery.
+
+### Security
+
+- MFA enable revokes other password-only sessions.
+- Stricter CSP (`object-src`, `frame-src`, `worker-src`), COOP/CORP and Permissions-Policy headers.
+- Significantly expanded SECURITY.md and production readiness documentation.
+
 ## [1.1.1] - 2026-11-28
 
 ### Fixed

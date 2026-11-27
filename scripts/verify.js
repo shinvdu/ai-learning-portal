@@ -10,12 +10,17 @@ import path from 'node:path';
 
 const TEMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-learning-portal-verify-'));
 process.env.PORTAL_DB = path.join(TEMP_DIR, 'verify.db');
+// Verification is deterministic regardless of the caller's shell environment.
+process.env.APP_ENV = 'development';
+process.env.NODE_ENV = 'test';
+process.env.SEED_DEMO_RECORDS = '1';
 
 const { openDb, resetRecords, getAllRecords, getCourseMeta, getKnowledge, getChapterRows, ROOT } = await import(
   '../src/db.js'
 );
 const { groupEnrollments, summarize, byCourse, chapterStats } = await import('../src/analytics.js');
 const { CHAPTER_VIDEO_DEFAULT, CHAPTER_VIDEOS } = await import('../src/content.js');
+const { generateTotpSecret, generateTotp, verifyTotp } = await import('../src/totp.js');
 
 const db = openDb();
 const seed = resetRecords(db);
@@ -125,6 +130,15 @@ check(
   Object.values(CHAPTER_VIDEOS).every((v) => Boolean(v?.src && v?.poster)),
   true
 );
+
+console.log('\n— 安全基础设施 —');
+const migrations = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((r) => r.version);
+check('migration baseline + auth hardening', migrations.includes(1) && migrations.includes(2), true);
+check('auth_tokens table exists', Boolean(db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='auth_tokens'").get()), true);
+check('audit_log table exists', Boolean(db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='audit_log'").get()), true);
+const totpSecret = generateTotpSecret();
+check('TOTP roundtrip', verifyTotp(totpSecret, generateTotp(totpSecret)), true);
+check('TOTP rejects malformed code', verifyTotp(totpSecret, '12345'), false);
 
 console.log(`\n${failures === 0 ? '全部通过 ✅' : `${failures} 项不一致 ❌`}\n`);
 db.close();

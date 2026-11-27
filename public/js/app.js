@@ -26,6 +26,11 @@ function fmtTime(iso) {
   return d.toLocaleString('zh-CN', { hour12: false });
 }
 
+function cookieValue(name) {
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
 async function api(path, { method = 'GET', body, headers = {} } = {}) {
   const opts = { method, headers: { ...headers } };
   if (body !== undefined) {
@@ -35,6 +40,10 @@ async function api(path, { method = 'GET', body, headers = {} } = {}) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
+  }
+  if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
+    const csrf = cookieValue('aip_csrf');
+    if (csrf) opts.headers['X-CSRF-Token'] = csrf;
   }
   const res = await fetch(path, opts);
   const ct = res.headers.get('content-type') || '';
@@ -85,7 +94,7 @@ function renderUserArea() {
   if (currentUser) {
     el.innerHTML = `
       ${currentUser.role === 'admin' ? '<a class="user-admin" href="#/admin">管理后台</a>' : ''}
-      <span class="user-name" title="${esc(currentUser.email)}">${esc(currentUser.name)}</span>
+      <a class="user-name" href="#/account" title="${esc(currentUser.email)}">${esc(currentUser.name)}</a>
       <button type="button" class="btn btn-ghost btn-sm" id="logoutBtn">退出</button>`;
     el.querySelector('#logoutBtn').addEventListener('click', async () => {
       try {
@@ -119,6 +128,10 @@ const routes = [
   { re: /^\/insights\/?$/, nav: 'insights', view: viewInsights },
   { re: /^\/login\/?$/, nav: '', view: viewLogin },
   { re: /^\/register\/?$/, nav: '', view: viewRegister },
+  { re: /^\/forgot\/?$/, nav: '', view: viewForgot },
+  { re: /^\/reset\/?$/, nav: '', view: viewReset },
+  { re: /^\/verify\/?$/, nav: '', view: viewVerify },
+  { re: /^\/account\/?$/, nav: '', view: viewAccount },
   { re: /^\/admin\/?$/, nav: 'admin', view: viewAdmin },
   { re: /^\/admin\/course\/([A-Za-z0-9_-]+)$/, nav: 'admin', view: viewAdminCourse }
 ];
@@ -1477,6 +1490,86 @@ async function viewInsights() {
 
 /* ============================== 认证 ============================== */
 
+function completeLogin(user, message) {
+  currentUser = user;
+  renderUserArea();
+  showToast(message);
+  location.hash = user.role === 'admin' ? '#/admin' : '#/home';
+}
+
+async function resendVerificationEmail(email) {
+  try {
+    await api('/api/auth/resend-verification', { method: 'POST', body: { email } });
+    showToast('如果邮箱存在，验证邮件将很快送达');
+  } catch (err) {
+    showToast(apiError(err), 'err');
+  }
+}
+
+function renderVerificationSent(email) {
+  app.innerHTML = `
+    <section class="auth-page">
+      <div class="panel auth-card">
+        <span class="eyebrow">AI LEARNING PORTAL</span>
+        <h1>验证邮件已发送</h1>
+        <p class="auth-sub">我们已向 <strong>${esc(email)}</strong> 发送验证链接。请打开邮件完成验证；链接 24 小时内有效。</p>
+        <div class="form-actions">
+          <button type="button" class="btn btn-primary" id="resendVerificationBtn">重发验证邮件</button>
+          <a class="btn btn-ghost" href="#/login">去登录</a>
+        </div>
+        <p class="auth-alt">开发环境未配置邮件网关时，验证链接会打印在服务端控制台。</p>
+      </div>
+      <aside class="auth-aside">
+        <h2>下一步</h2>
+        <ul>
+          <li>打开邮箱中的验证链接</li>
+          <li>验证成功后会自动登录</li>
+          <li>如需帮助，请联系管理员</li>
+        </ul>
+      </aside>
+    </section>`;
+  document.querySelector('#resendVerificationBtn').addEventListener('click', () => resendVerificationEmail(email));
+}
+
+function renderMfaChallenge(challengeToken, email) {
+  app.innerHTML = `
+    <section class="auth-page">
+      <div class="panel auth-card">
+        <span class="eyebrow">AI LEARNING PORTAL</span>
+        <h1>两步验证</h1>
+        <p class="auth-sub">请输入认证器中的 6 位验证码，或使用一枚恢复码。</p>
+        <form id="mfaForm" class="auth-form">
+          <label>验证码<input name="code" required maxlength="12" autocomplete="one-time-code" placeholder="123456 或 XXXX-XXXX"></label>
+          <div class="form-error" id="mfaError" role="alert" hidden></div>
+          <button type="submit" class="btn btn-primary btn-block">验证并登录</button>
+        </form>
+        <p class="auth-alt"><a href="#/login">返回登录</a></p>
+      </div>
+      <aside class="auth-aside">
+        <h2>账号保护</h2>
+        <p class="side-note">验证码每 30 秒更新一次。恢复码只能使用一次，请妥善保存。</p>
+        <p class="side-note">${esc(email)}</p>
+      </aside>
+    </section>`;
+
+  const form = document.querySelector('#mfaForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#mfaError');
+    errorBox.hidden = true;
+    try {
+      const res = await api('/api/auth/mfa', {
+        method: 'POST',
+        body: { challengeToken, code: form.elements.code.value.trim() }
+      });
+      completeLogin(res.user, '登录成功');
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+}
+
 function authPage({ register = false } = {}) {
   if (currentUser) {
     location.hash = currentUser.role === 'admin' ? '#/admin' : '#/home';
@@ -1508,12 +1601,13 @@ function authPage({ register = false } = {}) {
               : ''
           }
           <div class="form-error" id="authError" role="alert" hidden></div>
-          <button type="submit" class="btn btn-primary btn-block">${register ? '注册并登录' : '登录'}</button>
+          <button type="submit" class="btn btn-primary btn-block">${register ? '注册' : '登录'}</button>
+          <button type="button" class="btn btn-ghost btn-block" id="resendVerifyBtn" hidden>重发验证邮件</button>
         </form>
         <p class="auth-alt">${
           register
             ? '已有账号？<a href="#/login">直接登录</a>'
-            : '还没有账号？<a href="#/register">注册一个</a>'
+            : '还没有账号？<a href="#/register">注册一个</a> · <a href="#/forgot">忘记密码？</a>'
         }</p>
       </div>
       <aside class="auth-aside">
@@ -1521,41 +1615,53 @@ function authPage({ register = false } = {}) {
         <ul>
           <li>浏览课程、章节、知识中心与学习看板</li>
           <li>完成知识中心测验</li>
+          <li>在账号页启用 MFA / 修改密码</li>
         </ul>
         <h2>管理员</h2>
         <ul>
           <li>用户管理：角色、启停、创建账号</li>
           <li>课程管理：课程信息、章节、视频</li>
           <li>编辑学习记录、导入/导出 CSV、恢复初始数据</li>
+          <li>查看审计日志</li>
         </ul>
         <p class="side-note">管理员账号由部署环境初始化；如忘记密码，可用 <code>npm run admin:reset</code> 重置。</p>
       </aside>
     </section>`;
 
   const form = document.querySelector('#authForm');
+  const resendBtn = document.querySelector('#resendVerifyBtn');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const errorBox = document.querySelector('#authError');
     errorBox.hidden = true;
+    if (resendBtn) resendBtn.hidden = true;
     const f = form.elements;
+    const email = f.email.value.trim();
     const password = f.password.value;
     if (register && password !== f.confirm.value) {
       errorBox.hidden = false;
       errorBox.textContent = '两次输入的密码不一致';
       return;
     }
-    const body = register
-      ? { name: f.name.value.trim(), email: f.email.value.trim(), password }
-      : { email: f.email.value.trim(), password };
+    const body = register ? { name: f.name.value.trim(), email, password } : { email, password };
     try {
       const res = await api(register ? '/api/auth/register' : '/api/auth/login', { method: 'POST', body });
-      currentUser = res.user;
-      renderUserArea();
-      showToast(register ? '注册成功' : `欢迎回来，${res.user.name}`);
-      location.hash = res.user.role === 'admin' ? '#/admin' : '#/home';
+      if (res.verificationRequired) {
+        renderVerificationSent(res.email);
+        return;
+      }
+      if (res.mfaRequired) {
+        renderMfaChallenge(res.challengeToken, email);
+        return;
+      }
+      completeLogin(res.user, register ? '注册成功' : `欢迎回来，${res.user.name}`);
     } catch (err) {
       errorBox.hidden = false;
       errorBox.textContent = apiError(err);
+      if (['EMAIL_UNVERIFIED', 'MAIL_FAILED'].includes(err.payload?.code) && resendBtn) {
+        resendBtn.hidden = false;
+        resendBtn.onclick = () => resendVerificationEmail(email);
+      }
     }
   });
 }
@@ -1566,6 +1672,313 @@ async function viewLogin() {
 
 async function viewRegister() {
   authPage({ register: true });
+}
+
+async function viewForgot() {
+  app.innerHTML = `
+    <section class="auth-page">
+      <div class="panel auth-card">
+        <span class="eyebrow">ACCOUNT RECOVERY</span>
+        <h1>忘记密码</h1>
+        <p class="auth-sub">输入注册邮箱，我们会发送一封重置密码邮件（1 小时内有效）。</p>
+        <form id="forgotForm" class="auth-form">
+          <label>邮箱<input name="email" type="email" required maxlength="160" autocomplete="email" placeholder="you@example.com"></label>
+          <div class="form-error" id="forgotError" role="alert" hidden></div>
+          <button type="submit" class="btn btn-primary btn-block">发送重置邮件</button>
+        </form>
+        <p class="auth-alt"><a href="#/login">返回登录</a></p>
+      </div>
+      <aside class="auth-aside">
+        <h2>说明</h2>
+        <ul>
+          <li>为避免泄露账号信息，无论邮箱是否存在都会返回相同提示。</li>
+          <li>邮件中的链接只能使用一次。</li>
+          <li>开发环境未配置邮件网关时，链接会打印在服务端控制台。</li>
+        </ul>
+      </aside>
+    </section>`;
+  const form = document.querySelector('#forgotForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#forgotError');
+    errorBox.hidden = true;
+    try {
+      const res = await api('/api/auth/forgot-password', {
+        method: 'POST',
+        body: { email: form.elements.email.value.trim() }
+      });
+      app.querySelector('.auth-card').innerHTML = `
+        <span class="eyebrow">ACCOUNT RECOVERY</span>
+        <h1>邮件已发送</h1>
+        <p class="auth-sub">${esc(res.message || '如果邮箱存在，重置邮件将很快送达。')}</p>
+        <div class="form-actions"><a class="btn btn-primary" href="#/login">返回登录</a></div>`;
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+}
+
+async function viewReset(args, params) {
+  const token = params.get('token') || '';
+  app.innerHTML = `
+    <section class="auth-page">
+      <div class="panel auth-card">
+        <span class="eyebrow">ACCOUNT RECOVERY</span>
+        <h1>重置密码</h1>
+        <p class="auth-sub">设置一个新的密码，重置后所有旧会话都会失效。</p>
+        <form id="resetForm" class="auth-form">
+          <label>新密码<input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="至少 8 个字符"></label>
+          <label>确认新密码<input name="confirm" type="password" required minlength="8" autocomplete="new-password" placeholder="再次输入密码"></label>
+          <div class="form-error" id="resetError" role="alert" hidden></div>
+          <button type="submit" class="btn btn-primary btn-block" ${token ? '' : 'disabled'}>重置密码</button>
+        </form>
+        <p class="auth-alt"><a href="#/login">返回登录</a></p>
+      </div>
+      <aside class="auth-aside">
+        <h2>安全提示</h2>
+        <p class="side-note">${token ? '重置链接 1 小时内有效，且只能使用一次。' : '链接缺少 token，请重新从邮件打开。'}</p>
+      </aside>
+    </section>`;
+  const form = document.querySelector('#resetForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#resetError');
+    errorBox.hidden = true;
+    if (form.elements.password.value !== form.elements.confirm.value) {
+      errorBox.hidden = false;
+      errorBox.textContent = '两次输入的密码不一致';
+      return;
+    }
+    try {
+      await api('/api/auth/reset-password', {
+        method: 'POST',
+        body: { token, password: form.elements.password.value }
+      });
+      currentUser = null;
+      renderUserArea();
+      app.querySelector('.auth-card').innerHTML = `
+        <span class="eyebrow">ACCOUNT RECOVERY</span>
+        <h1>密码已重置</h1>
+        <p class="auth-sub">旧会话已全部失效，请使用新密码登录。</p>
+        <div class="form-actions"><a class="btn btn-primary" href="#/login">去登录</a></div>`;
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+}
+
+async function viewVerify(args, params) {
+  const token = params.get('token') || '';
+  if (!token) {
+    app.innerHTML = `<div class="panel auth-gate"><h1>验证链接无效</h1><p>链接缺少 token，请从邮件中重新打开。</p><a class="btn btn-primary" href="#/login">返回登录</a></div>`;
+    return;
+  }
+  // Deliberately requires a click: email scanners often prefetch GET links.
+  app.innerHTML = `
+    <div class="panel auth-gate">
+      <span class="eyebrow">EMAIL VERIFICATION</span>
+      <h1>确认验证邮箱</h1>
+      <p>点击下方按钮完成验证并登录。链接 24 小时内有效。</p>
+      <button type="button" class="btn btn-primary" id="verifyEmailBtn">确认验证邮箱</button>
+    </div>`;
+  const btn = document.querySelector('#verifyEmailBtn');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const res = await api('/api/auth/verify-email', { method: 'POST', body: { token } });
+      if (res.mfaRequired) {
+        renderMfaChallenge(res.challengeToken, res.user.email);
+        return;
+      }
+      currentUser = res.user;
+      renderUserArea();
+      app.innerHTML = `
+        <div class="panel auth-gate">
+          <span class="eyebrow">EMAIL VERIFIED</span>
+          <h1>邮箱验证成功</h1>
+          <p>${esc(res.user.email)} 已通过验证，并已自动登录。</p>
+          <div class="form-actions">
+            <a class="btn btn-primary" href="${res.user.role === 'admin' ? '#/admin' : '#/home'}">进入门户</a>
+            <a class="btn btn-ghost" href="#/account">账号设置</a>
+          </div>
+        </div>`;
+    } catch (err) {
+      app.innerHTML = `
+        <div class="panel auth-gate">
+          <h1>验证失败</h1>
+          <p>${esc(apiError(err))}</p>
+          <a class="btn btn-primary" href="#/login">返回登录</a>
+        </div>`;
+    }
+  });
+}
+
+async function viewAccount() {
+  if (!currentUser) {
+    app.innerHTML = `<div class="panel auth-gate"><span class="eyebrow">ACCOUNT</span><h1>请先登录</h1><p>登录后可修改密码、启用 MFA 与查看账号状态。</p><a class="btn btn-primary" href="#/login">去登录</a></div>`;
+    return;
+  }
+  const me = await api('/api/auth/me');
+  currentUser = me.user;
+  renderUserArea();
+  const verified = currentUser.emailVerified;
+  const mfaEnabled = currentUser.mfaEnabled;
+
+  app.innerHTML = `
+    <header class="page-head">
+      <div>
+        <span class="eyebrow">ACCOUNT · 账号设置</span>
+        <h1>${esc(currentUser.name)}</h1>
+        <p>${esc(currentUser.email)} · ${currentUser.role === 'admin' ? '管理员' : '学员'}</p>
+      </div>
+      <div class="admin-head-actions">
+        ${currentUser.role === 'admin' ? '<a class="btn btn-ghost btn-sm" href="#/admin">管理后台</a>' : ''}
+        <a class="btn btn-ghost btn-sm" href="#/home">返回首页</a>
+      </div>
+    </header>
+
+    <div class="account-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>账号状态</h2><p class="panel-sub">邮箱验证与登录保护。</p></div>
+        </div>
+        <dl class="kv">
+          <div><dt>邮箱</dt><dd>${esc(currentUser.email)}</dd></div>
+          <div><dt>邮箱验证</dt><dd>${verified ? '<span class="status-pill ok">已验证</span>' : '<span class="status-pill off">未验证</span>'}</dd></div>
+          <div><dt>两步验证 MFA</dt><dd>${mfaEnabled ? '<span class="status-pill ok">已启用</span>' : '<span class="status-pill off">未启用</span>'}</dd></div>
+          <div><dt>角色</dt><dd>${currentUser.role === 'admin' ? '管理员' : '学员'}</dd></div>
+        </dl>
+        ${!verified ? '<button type="button" class="btn btn-ghost btn-sm" id="accountResend">重发验证邮件</button>' : ''}
+      </section>
+
+      <section class="panel">
+        <h2>修改密码</h2>
+        <p class="panel-sub">修改后会撤销其他设备上的会话。</p>
+        <form id="passwordChangeForm" class="auth-form">
+          <label>当前密码<input name="currentPassword" type="password" required autocomplete="current-password"></label>
+          <label>新密码<input name="newPassword" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label>确认新密码<input name="confirm" type="password" required minlength="8" autocomplete="new-password"></label>
+          <div class="form-error" id="passwordChangeError" role="alert" hidden></div>
+          <button type="submit" class="btn btn-primary">更新密码</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>两步验证 MFA</h2><p class="panel-sub">使用 TOTP 认证器（Google Authenticator、1Password 等）。</p></div>
+          ${mfaEnabled ? '<span class="status-pill ok">已启用</span>' : ''}
+        </div>
+        ${
+          mfaEnabled
+            ? `<form id="mfaDisableForm" class="auth-form">
+                 <label>密码<input name="password" type="password" required autocomplete="current-password"></label>
+                 <div class="form-error" id="mfaDisableError" role="alert" hidden></div>
+                 <button type="submit" class="btn btn-danger-ghost">停用 MFA</button>
+               </form>`
+            : `<div id="mfaSetupArea">
+                 <button type="button" class="btn btn-primary" id="startMfaBtn">开始设置 MFA</button>
+                 <div id="mfaSetupResult" hidden>
+                   <p class="side-note">在认证器中添加以下密钥，或手动输入一次性 URI：</p>
+                   <code class="secret-block" id="mfaSecret"></code>
+                   <code class="secret-block" id="mfaUri"></code>
+                   <form id="mfaEnableForm" class="auth-form">
+                     <label>认证器 6 位验证码<input name="code" required maxlength="6" inputmode="numeric" autocomplete="one-time-code"></label>
+                     <div class="form-error" id="mfaEnableError" role="alert" hidden></div>
+                     <button type="submit" class="btn btn-primary">启用 MFA</button>
+                   </form>
+                   <div id="recoveryCodes" hidden></div>
+                 </div>
+               </div>`
+        }
+      </section>
+    </div>`;
+
+  document.querySelector('#accountResend')?.addEventListener('click', () => resendVerificationEmail(currentUser.email));
+
+  const pwForm = document.querySelector('#passwordChangeForm');
+  pwForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#passwordChangeError');
+    errorBox.hidden = true;
+    if (pwForm.elements.newPassword.value !== pwForm.elements.confirm.value) {
+      errorBox.hidden = false;
+      errorBox.textContent = '两次输入的新密码不一致';
+      return;
+    }
+    try {
+      await api('/api/auth/change-password', {
+        method: 'POST',
+        body: {
+          currentPassword: pwForm.elements.currentPassword.value,
+          newPassword: pwForm.elements.newPassword.value
+        }
+      });
+      pwForm.reset();
+      showToast('密码已更新，其他设备已退出');
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+
+  const disableForm = document.querySelector('#mfaDisableForm');
+  disableForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.querySelector('#mfaDisableError');
+    errorBox.hidden = true;
+    try {
+      await api('/api/auth/mfa/disable', {
+        method: 'POST',
+        body: { password: disableForm.elements.password.value }
+      });
+      showToast('MFA 已停用');
+      await viewAccount();
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
+
+  document.querySelector('#startMfaBtn')?.addEventListener('click', async () => {
+    try {
+      const res = await api('/api/auth/mfa/setup', { method: 'POST', body: {} });
+      document.querySelector('#mfaSetupResult').hidden = false;
+      document.querySelector('#mfaSecret').textContent = res.secret;
+      document.querySelector('#mfaUri').textContent = res.otpauthUri;
+      showToast('请在认证器中添加密钥');
+    } catch (err) {
+      showToast(apiError(err), 'err');
+    }
+  });
+
+  document.querySelector('#mfaEnableForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errorBox = document.querySelector('#mfaEnableError');
+    errorBox.hidden = true;
+    try {
+      const res = await api('/api/auth/mfa/enable', {
+        method: 'POST',
+        body: { code: form.elements.code.value.trim() }
+      });
+      const box = document.querySelector('#recoveryCodes');
+      box.hidden = false;
+      box.innerHTML = `<h3>恢复码（只显示一次）</h3>
+        <p class="side-note">请妥善保存，每个恢复码只能使用一次。</p>
+        <div class="recovery-grid">${res.recoveryCodes.map((c) => `<code>${esc(c)}</code>`).join('')}</div>
+        <button type="button" class="btn btn-ghost" id="mfaDoneBtn">我已保存，完成</button>`;
+      form.querySelector('button[type=submit]').disabled = true;
+      currentUser = { ...currentUser, mfaEnabled: true };
+      renderUserArea();
+      box.querySelector('#mfaDoneBtn').addEventListener('click', () => viewAccount());
+      showToast('MFA 已启用');
+    } catch (err) {
+      errorBox.hidden = false;
+      errorBox.textContent = apiError(err);
+    }
+  });
 }
 
 function adminGate() {
@@ -1594,9 +2007,14 @@ function bindDialogClose(dialog) {
 
 async function viewAdmin() {
   if (!adminGate()) return;
-  const [usersData, coursesData] = await Promise.all([api('/api/admin/users'), api('/api/admin/courses')]);
+  const [usersData, coursesData, auditData] = await Promise.all([
+    api('/api/admin/users'),
+    api('/api/admin/courses'),
+    api('/api/admin/audit?limit=30')
+  ]);
   const users = usersData.users ?? [];
   const courses = coursesData.courses ?? [];
+  const audit = auditData.rows ?? [];
 
   app.innerHTML = `
     <header class="page-head">
@@ -1623,7 +2041,13 @@ async function viewAdmin() {
             ${users
               .map(
                 (u) => `<tr>
-                  <td><strong>${esc(u.name)}</strong><div class="muted">${esc(u.email)}</div></td>
+                  <td><strong>${esc(u.name)}</strong><div class="muted">${esc(u.email)}</div>
+                    <div class="user-flags">
+                      ${u.email_verified ? '<span class="status-pill ok">已验证</span>' : '<span class="status-pill off">未验证</span>'}
+                      ${u.mfa_enabled ? '<span class="status-pill ok">MFA</span>' : ''}
+                      ${u.locked_until && u.locked_until > Date.now() ? '<span class="status-pill off">锁定</span>' : ''}
+                    </div>
+                  </td>
                   <td><select data-user-role="${u.id}" aria-label="用户角色" ${u.id === currentUser.id ? 'disabled' : ''}>
                     <option value="learner"${u.role === 'learner' ? ' selected' : ''}>学员</option>
                     <option value="admin"${u.role === 'admin' ? ' selected' : ''}>管理员</option>
@@ -1636,9 +2060,14 @@ async function viewAdmin() {
                   </td>
                   <td class="muted">${esc(u.last_login_at ?? '—')}</td>
                   <td class="muted">${esc(u.created_at ?? '—')}</td>
-                  <td><button type="button" class="btn-link" data-user-password="${u.id}" data-user-name="${esc(
-                    u.name
-                  )}">改密码</button></td>
+                  <td class="actions">
+                    <button type="button" class="btn-link" data-user-password="${u.id}" data-user-name="${esc(
+                      u.name
+                    )}">改密码</button>
+                    ${!u.email_verified ? `<button type="button" class="btn-link" data-user-verify="${u.id}">标记已验证</button>` : ''}
+                    ${u.mfa_enabled ? `<button type="button" class="btn-link danger-text" data-user-reset-mfa="${u.id}">重置 MFA</button>` : ''}
+                    ${u.locked_until && u.locked_until > Date.now() ? `<button type="button" class="btn-link" data-user-unlock="${u.id}">解锁</button>` : ''}
+                  </td>
                 </tr>`
               )
               .join('')}
@@ -1670,6 +2099,35 @@ async function viewAdmin() {
                 </tr>`
               )
               .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>审计日志</h2><p class="panel-sub">最近 30 条登录、权限与数据变更记录。</p></div>
+        <span class="tag">只读</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>IP</th></tr></thead>
+          <tbody>
+            ${
+              audit.length
+                ? audit
+                    .map(
+                      (a) => `<tr>
+                        <td class="muted">${esc(a.created_at)}</td>
+                        <td>${esc(a.actor_email ?? '—')}</td>
+                        <td><code>${esc(a.action)}</code></td>
+                        <td class="muted">${esc(a.target_type ?? '—')}${a.target_id ? ' · ' + esc(a.target_id) : ''}</td>
+                        <td class="muted">${esc(a.ip ?? '—')}</td>
+                      </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="5" class="muted">暂无审计记录</td></tr>'
+            }
           </tbody>
         </table>
       </div>
@@ -1786,6 +2244,43 @@ async function viewAdmin() {
       passwordForm.elements.id.value = pwd.dataset.userPassword;
       document.querySelector('#passwordDialogTitle').textContent = `修改密码 · ${pwd.dataset.userName}`;
       passwordDialog.showModal();
+      return;
+    }
+    const verify = e.target.closest('[data-user-verify]');
+    if (verify) {
+      try {
+        await api(`/api/admin/users/${verify.dataset.userVerify}`, {
+          method: 'PATCH',
+          body: { emailVerified: true }
+        });
+        showToast('邮箱已标记为已验证');
+      } catch (err) {
+        showToast(apiError(err), 'err');
+      }
+      await viewAdmin();
+      return;
+    }
+    const unlock = e.target.closest('[data-user-unlock]');
+    if (unlock) {
+      try {
+        await api(`/api/admin/users/${unlock.dataset.userUnlock}`, { method: 'PATCH', body: { unlock: true } });
+        showToast('账号已解锁');
+      } catch (err) {
+        showToast(apiError(err), 'err');
+      }
+      await viewAdmin();
+      return;
+    }
+    const resetMfa = e.target.closest('[data-user-reset-mfa]');
+    if (resetMfa) {
+      if (!confirm('重置该用户的 MFA？对方需要重新绑定认证器。')) return;
+      try {
+        await api(`/api/admin/users/${resetMfa.dataset.userResetMfa}`, { method: 'PATCH', body: { resetMfa: true } });
+        showToast('MFA 已重置');
+      } catch (err) {
+        showToast(apiError(err), 'err');
+      }
+      await viewAdmin();
       return;
     }
     const toggle = e.target.closest('[data-user-active]');

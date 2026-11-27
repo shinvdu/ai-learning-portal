@@ -1,6 +1,6 @@
 {
   "name": "ai-learning-portal",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "A zero-dependency Node.js + SQLite learning portal demo with courses, analytics, auth, and an admin area.",
   "type": "module",
   "license": "MIT",
@@ -30,6 +30,7 @@
     "dev": "node --watch server.js",
     "seed": "node scripts/seed.js",
     "admin:reset": "node scripts/reset-admin.js",
+    "backup": "node scripts/backup.js",
     "verify": "node scripts/verify.js",
     "test": "node scripts/verify.js"
   }

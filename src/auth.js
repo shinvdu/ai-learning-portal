@@ -57,7 +57,7 @@ export function getSessionUser(db, token) {
   const id = sessionId(token);
   const row = db
     .prepare(
-      `SELECT s.expires_at, u.id, u.email, u.name, u.role, u.active
+      `SELECT s.expires_at, u.id, u.email, u.name, u.role, u.active, u.email_verified, u.mfa_enabled
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ?`
     )
@@ -67,7 +67,14 @@ export function getSessionUser(db, token) {
     db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     return null;
   }
-  return { id: row.id, email: row.email, name: row.name, role: row.role };
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    emailVerified: Boolean(row.email_verified),
+    mfaEnabled: Boolean(row.mfa_enabled)
+  };
 }
 
 export function destroySession(db, token) {
@@ -87,6 +94,49 @@ export function destroyUserSessions(db, userId, { exceptToken = null } = {}) {
   } else {
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
   }
+}
+
+/* ------------------------- one-time auth tokens ------------------------- */
+
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+/** Issue a single-use token (verify email, reset password, MFA challenge). */
+export function issueAuthToken(db, userId, type, ttlMs) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const id = tokenHash(token);
+  const expiresAt = Date.now() + ttlMs;
+  db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND type = ? AND used_at IS NULL').run(userId, type);
+  db.prepare('INSERT INTO auth_tokens(id, user_id, type, expires_at) VALUES(?, ?, ?, ?)').run(
+    id,
+    userId,
+    type,
+    expiresAt
+  );
+  return { token, expiresAt };
+}
+
+export function getAuthToken(db, token, type) {
+  if (!token) return null;
+  return (
+    db
+      .prepare(
+        'SELECT id, user_id, type, expires_at FROM auth_tokens WHERE id = ? AND type = ? AND used_at IS NULL'
+      )
+      .get(tokenHash(token), type) ?? null
+  );
+}
+
+export function markAuthTokenUsed(db, token) {
+  if (!token) return;
+  db.prepare("UPDATE auth_tokens SET used_at = datetime('now') WHERE id = ?").run(tokenHash(token));
+}
+
+export function purgeAuthTokens(db) {
+  const now = Date.now();
+  db.prepare('DELETE FROM auth_tokens WHERE expires_at < ?').run(now);
+  db.prepare("DELETE FROM auth_tokens WHERE used_at IS NOT NULL AND used_at < datetime('now', '-1 day')").run();
 }
 
 export function parseCookies(header) {
@@ -128,6 +178,9 @@ export function ensureAdminUser(db) {
 
   const email = normalizeEmail(process.env.ADMIN_EMAIL || 'admin@local.test');
   if (!isEmail(email)) throw new Error('ADMIN_EMAIL 不是合法邮箱');
+  if ((process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production') && !process.env.ADMIN_PASSWORD) {
+    throw new Error('生产环境必须设置 ADMIN_PASSWORD（至少 8 个字符）');
+  }
   const generated = !process.env.ADMIN_PASSWORD;
   const password = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
   const problem = passwordProblem(password);

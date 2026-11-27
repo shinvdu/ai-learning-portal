@@ -2,7 +2,7 @@
 
 **A zero-dependency Node.js + SQLite demo portal for courses, knowledge bases, and learning analytics.**
 
-[中文](README.md) · [Architecture](docs/ARCHITECTURE.md) · [Demo guide](docs/DEMO_GUIDE.md) · [Contributing](CONTRIBUTING.md)
+[中文](README.md) · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Production readiness](docs/PRODUCTION_READINESS.md) · [Demo guide](docs/DEMO_GUIDE.md) · [Contributing](CONTRIBUTING.md)
 
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?logo=node.js&logoColor=white)](#quick-start)
 [![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=white)](#stack)
@@ -17,7 +17,7 @@
 
 A runnable reference implementation of a learning portal: course catalog, course detail, chapter pages, knowledge center, learning dashboard, and data insights. Every KPI is computed from SQLite — edit one record and all numbers and charts update.
 
-> Demo/template project: all data and course content are simulated. Session login and an admin area are included, but there is no email verification, password recovery email, MFA, or audit logging. Do not use it as-is in production.
+> Demo/reference project: all sample data and course content are simulated. Email verification, password reset, MFA, audit logging, account lockout, CSRF protection, versioned migrations, and backups are included, so it can serve as a **single-node controlled production** baseline. It is still not a public SaaS: no PostgreSQL/Redis multi-instance setup, SSO, multi-tenancy, or audit retention.
 
 > Live demo (early deployment, may lag behind `main`): https://77fpveqc.qwenwork.host/
 
@@ -30,7 +30,10 @@ A runnable reference implementation of a learning portal: course catalog, course
 - Learning dashboard: 5 KPIs, 6 hand-written SVG charts, course filter.
 - Data insights generated from the current dataset.
 - Registration, login, logout with scrypt password hashing and HttpOnly session cookies.
-- Admin user management: create users, change roles, enable/disable accounts, reset passwords; last admin protection.
+- Production email verification, password reset, and account lockout.
+- TOTP MFA with one-time recovery codes; self-service account page.
+- Admin user management: create users, roles, enable/disable, reset passwords/MFA, unlock; last admin protection.
+- Audit log for authentication, user, course/chapter, record, and CSV operations.
 - Admin course management: course metadata, video config, chapter create/edit/delete.
 - Editable data playground (admin only): CRUD, CSV import/export, reset to seed data.
 - Zero npm dependencies, zero build step, works offline.
@@ -47,7 +50,9 @@ npm start
 # open http://127.0.0.1:8787
 ```
 
-No `npm install` is needed. On first run, the app creates `data/portal.db`, imports 177 simulated learning records, and bootstraps an admin account.
+No `npm install` is needed. On first run, the app creates `data/portal.db`, imports 177 simulated learning records (development only), and bootstraps an admin account.
+
+For a single-node production deployment see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Production requires `APP_ENV=production`, `PUBLIC_BASE_URL`, a mail webhook, and an explicit admin password; demo learning records are skipped.
 
 Set the admin credentials explicitly for a predictable login:
 
@@ -74,7 +79,8 @@ LAN demo: `HOST=0.0.0.0 npm start`.
 | Frontend | Vanilla ES Modules + hash routing | No framework, no build |
 | Charts | Hand-written SVG | No ECharts / CDN |
 | Video | 8-second MP4 generated with ffmpeg | HTTP Range supported |
-| Auth | `node:crypto` scrypt + SQLite sessions | HttpOnly / SameSite cookies, zero dependencies |
+| Auth | scrypt + SQLite sessions + TOTP | HttpOnly / SameSite cookies, one-time tokens, audit |
+| Ops | Versioned SQLite migrations + `VACUUM INTO` backups | Single-node production baseline |
 | Tests | `scripts/verify.js` | Metrics, content, chapters, assets (temporary DB) |
 
 ## Data and metrics
@@ -111,7 +117,8 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 | POST | `/api/auth/login` | Sign in |
 | POST | `/api/auth/logout` | Sign out |
 | GET / POST | `/api/admin/users` | List / create users (admin) |
-| PATCH | `/api/admin/users/:id` | Role, active flag, password (admin) |
+| PATCH | `/api/admin/users/:id` | Role, active, password, unlock, MFA reset, verify email (admin) |
+| GET | `/api/admin/audit` | Audit log (admin) |
 | GET / POST | `/api/admin/courses` | List / create courses (admin) |
 | PATCH / DELETE | `/api/admin/courses/:id` | Update / delete course (admin) |
 | POST / PATCH / DELETE | `/api/admin/courses/:id/chapters...` | Chapter management (admin) |
@@ -122,8 +129,12 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 | GET | `/api/knowledge/:id` | Knowledge center content |
 | GET | `/api/dashboard?course=` | KPIs, charts, insights |
 | GET | `/api/insights` | Generated insights, formulas, pitfalls |
+| POST | `/api/auth/verify-email` / `resend-verification` | Email verification |
+| POST | `/api/auth/forgot-password` / `reset-password` | Password reset |
+| POST | `/api/auth/mfa` / `mfa/setup` / `enable` / `disable` | MFA login and self-service setup |
+| POST | `/api/auth/change-password` | Change password (revokes other sessions) |
 | GET | `/api/records` | Paginated learning records (admin) |
-| POST / PATCH / DELETE | `/api/records...` | Record CRUD (demo, unauthenticated) |
+| POST / PATCH / DELETE | `/api/records...` | Record CRUD (admin) |
 | POST | `/api/records/import` | Replace all records from CSV |
 | POST | `/api/admin/reset` | Restore seed CSV |
 | GET | `/api/export.csv` | Export current records |
@@ -134,16 +145,25 @@ This assumes sequential progress. It is a presentation aid, not raw per-chapter 
 |---|---|---|
 | `PORT` | `8787` | Port |
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for LAN) |
+| `TRUST_PROXY` | auto `1` in production | Trust `X-Forwarded-For/Proto` only behind a trusted proxy |
 | `PORTAL_DB` | `data/portal.db` | SQLite database path |
-| `ADMIN_EMAIL` | `admin@local.test` | Email for the bootstrapped admin |
-| `ADMIN_PASSWORD` | generated and printed once | Password for the bootstrapped admin (min 8 characters) |
+| `APP_ENV` | `development` | `production` enables verification and production checks |
+| `PUBLIC_BASE_URL` | `http://localhost:8787` | Base URL used in email links |
+| `MAIL_WEBHOOK_URL` | none | Email relay endpoint (required in production) |
+| `MAIL_WEBHOOK_TOKEN` | none | Bearer token for the relay |
+| `MAIL_FROM` | local placeholder | Sender address |
+| `SEED_DEMO_RECORDS` | `0` in production / `1` in dev | Set `0` to skip demo records |
+| `ADMIN_EMAIL` | `admin@local.test` | Bootstrapped admin email |
+| `ADMIN_PASSWORD` | generated in dev; required in production | Admin password (min 8 characters) |
 
 ## Development
 
 ```bash
-npm run dev      # node --watch
-npm run seed     # restore seed data
-npm run verify   # validate metrics, content, chapters, assets (temporary DB)
+npm run dev          # node --watch
+npm run seed         # restore seed data
+npm run backup       # VACUUM INTO backup under backups/
+npm run admin:reset  # reset/create an admin and revoke its sessions
+npm run verify       # validate metrics, content, chapters, assets (temporary DB)
 npm test
 ```
 
@@ -151,22 +171,26 @@ npm test
 
 ## Security
 
-- Demo-grade auth: scrypt password hashing, SQLite sessions, HttpOnly + SameSite=Lax cookies, login/register rate limiting.
-- Role check: raw record access and all admin endpoints require an admin session.
-- Bootstrap the admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; the last active admin cannot demote or disable themselves.
-- Same-origin checks on mutating requests, parameterized SQL, CSV validation, HTML escaping, CSP, 2 MB body limit.
-- No email verification, password recovery email, MFA, audit log, or multi-tenancy.
-- Use simulated data only. See [SECURITY.md](SECURITY.md).
+- scrypt password hashing, hashed session tokens, HttpOnly + SameSite=Lax cookies, per-IP rate limits.
+- Email verification and one-time password-reset tokens; reset revokes all sessions.
+- TOTP MFA with one-time recovery codes; admin MFA reset.
+- Per-account lockout after 5 failures for 15 minutes; admin unlock.
+- CSRF double-submit cookie + same-origin checks on mutations.
+- Admin-only raw record access, user/course management, and audit log.
+- Versioned migrations, `VACUUM INTO` backups, `/healthz` and `/readyz`.
+- Still missing: built-in SMTP (mail webhook only), PostgreSQL/Redis multi-instance, SSO, multi-tenancy, audit retention, CSP nonce.
+- Use simulated data only for demos. See [SECURITY.md](SECURITY.md).
 
 ## Project layout
 
 ```text
 server.js            HTTP server and API routes
-src/                 database, analytics, auth, content, CSV
+src/                 database, analytics, auth, migrations, mailer, TOTP, content, CSV
 public/              index.html, CSS, vanilla JS, sample video
 data/                seed CSV, lecture texts, SQLite DB (generated)
-scripts/             seed and verification scripts
-docs/                architecture, demo guide, screenshots
+scripts/             seed, backup, admin reset, verification
+deploy/              Nginx and systemd examples
+docs/                architecture, deployment, production roadmap, demo guide, screenshots
 ```
 
 ## License
