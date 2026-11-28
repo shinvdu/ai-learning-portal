@@ -2,8 +2,9 @@
  * F100 SQLite → PostgreSQL importer tests.
  *
  * Uses a dedicated temporary database (`ai_portal_import_test`) created and
- * migrated by the suite and dropped afterwards. The fixture `data/portal.db`
- * and the configured `ai_portal` database are never written.
+ * migrated by the suite and dropped afterwards. The committed v1 fixture
+ * `apps/api/test/fixtures/portal-v1.db` and the configured `ai_portal`
+ * database are never written.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -17,8 +18,7 @@ import { runMigrations } from '@portal/db';
 import { importSqlite, readSqliteSnapshot } from '../../src/importers/sqlite-to-pg.js';
 import { deriveMfaKey } from '../../src/modules/auth/mfa.js';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
-const FIXTURE_DB = path.join(REPO_ROOT, 'data', 'portal.db');
+const FIXTURE_DB = fileURLToPath(new URL('../fixtures/portal-v1.db', import.meta.url));
 
 const IMPORT_DB = 'ai_portal_import_test';
 const MAINTENANCE_URL =
