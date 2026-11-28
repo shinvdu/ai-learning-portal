@@ -3,10 +3,10 @@
 - **版本**：2.0.0
 - **分支**：`next` → `main`
 - **标签**：`v2.0.0`
-- **状态**：**清单已准备，但尚未执行**（未合并、未打 tag、未发布、未推送镜像）。
+- **状态**：**已发布**（2026-11-28，tag `v2.0.0`，https://github.com/shinvdu/ai-learning-portal/releases/tag/v2.0.0）。
 - **兼容基线**：`v1.2.0` 标签保持可用，可随时检出运行零依赖离线版。
 
-> 本文是发布操作单，不代表发布已经发生。所有条目在真正执行前保持未勾选。
+> 发布已执行。以下检查清单保留为发布记录；GitHub 分支保护等仓库设置需管理员在控制台确认。
 
 ## 1. 发布内容
 
@@ -68,7 +68,7 @@
 - [ ] `quality`、`test`、`e2e` 在 `main` 全绿。
 - [ ] 分支保护与必需检查配置正确。
 
-## 3. 发布步骤（待执行）
+## 3. 发布步骤（已执行）
 
 ```bash
 # 1. 确认工作树干净、CI 在 next 上全绿
@@ -90,7 +90,7 @@ docker build -f apps/api/Dockerfile -t <registry>/ai-learning-portal-api:2.0.0 .
 docker build -f apps/web/Dockerfile -t <registry>/ai-learning-portal-web:2.0.0 .
 ```
 
-> 以上命令仅为操作草案；在获得明确发布授权前不要执行 push / merge / tag / publish。
+> 实际执行：`main` 从 `f69c061` 快进到 `ead1594`，tag `v2.0.0` 已推送，GitHub Release 已发布。
 
 ## 4. 回滚到 v1.2.0
 
