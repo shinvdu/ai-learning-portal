@@ -100,13 +100,19 @@ VITE_API_TARGET=http://127.0.0.1:8788 npm run dev -w @portal/web
 | `ADMIN_EMAIL` | `admin@local.test` | 首次启动引导管理员 |
 | `ADMIN_PASSWORD` | `dev-admin-123` | 仅本地；生产必须替换 |
 | `MFA_ENC_KEY` | 32 字节 base64 测试值 | MFA secret 加密；生产必须独立生成 |
-| `MAIL_TRANSPORT` | `console` | 开发打印邮件；生产用 `webhook`（SMTP 为 P1） |
+| `MAIL_TRANSPORT` | `console` | 开发打印收件人与主题（不打印正文）；生产用 `webhook` 或 `smtp` |
 | `MAIL_FROM` | `'AI Learning Portal <no-reply@local.test>'` | **含空格/尖括号，必须加引号** |
+| `SMTP_URL` | 未设置 | 仅 `MAIL_TRANSPORT=smtp` 需要；如 `smtp://user:pass@127.0.0.1:1025`（本地可用 Mailpit/MailHog） |
+| `STORAGE_DRIVER` | `local` | `local` 或 `s3`（本地开发一般保持 `local`） |
+| `MEDIA_DIR` | `./data/media` | 本地媒体目录（gitignored） |
+| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限 |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 未设置 | 仅 `STORAGE_DRIVER=s3` 需要；MinIO 用 §13 的 profile 提供 |
+| `S3_REGION` / `S3_FORCE_PATH_STYLE` / `S3_PUBLIC_URL` | `us-east-1` / `1` / 空 | MinIO 默认路径风格 |
 | `SEED_DEMO_RECORDS` | `1` | 允许示例记录 |
 | `ALLOW_DEMO_RESET` | `1` | 允许开发环境重置示例数据 |
 | `SERVE_WEB` | `1` | API 托管已构建前端；开发 UI 仍在 5173 |
 | `LOG_LEVEL` | `info` | pino 日志级别 |
-| `ENABLE_API_DOCS` | `0` | P1；当前未启用 |
+| `ENABLE_API_DOCS` | `0` | 生产开放 `/api/v1/docs` 的开关；开发环境（`APP_ENV=development`）默认已开放，无需设置 |
 | `VITE_API_TARGET` | 未设置（默认 8787） | 仅 Vite 代理使用 |
 
 生产模板见 `deploy/env.example`；`.env.example` 仅用于本地起步。`.env` 权限应为 `600`，不要提交。
@@ -142,6 +148,8 @@ psql "$DATABASE_URL" -c "delete from users where email='admin@local.test';"
 | `npm run db:migrate` | 应用 `packages/db/drizzle` 迁移 |
 | `npm run seed` | 课程/章节/知识/示例记录种子（开发默认导入记录） |
 | `npm run db:generate` | 修改 Drizzle schema 后生成迁移 |
+| `npm run import:sqlite -- --dry-run` | v1 SQLite → PostgreSQL 导入器（只校验，见 §14） |
+| `./scripts/import-sqlite.sh` | 同上，带 `DATABASE_URL` 检查的封装脚本 |
 | `./scripts/backup.sh` | `pg_dump -Fc` 到 `backups/` |
 | `./scripts/restore.sh` | 恢复备份（需 `--yes` 或交互确认） |
 | `./scripts/healthcheck.sh` | 检查 `/healthz` 与 `/readyz` |
@@ -264,3 +272,78 @@ v1 与 v2 数据完全独立（SQLite 文件 vs PostgreSQL）。切换前先停�
 - Python 数据分析筛选：17 人 / 55.9% / 81.1
 - 数据库：5 课程 / 30 章节 / 5 知识 / 177 记录
 - 测试：`npm test` 150 项通过；CI E2E 8 项通过
+
+## 13. 媒体存储与 MinIO（本地）
+
+默认 `STORAGE_DRIVER=local`，上传文件落在 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 Range。需要验证 S3 路径时，用 compose 的 `media` profile 起 MinIO（不会随默认 `docker compose up` 启动）：
+
+```bash
+docker compose --profile media up -d minio minio-init
+docker compose --profile media ps
+# MinIO API 127.0.0.1:9000；控制台 127.0.0.1:9001（默认 minioadmin/minioadmin）
+# minio-init 会按 S3_BUCKET（默认 portal-media）创建桶
+```
+
+然后在 `.env` 中切换驱动（示例值仅为本地）：
+
+```bash
+STORAGE_DRIVER=s3
+S3_ENDPOINT=http://127.0.0.1:9000
+S3_BUCKET=portal-media
+S3_ACCESS_KEY=minioadmin    # MinIO 本地默认值，仅开发；生产必须替换
+S3_SECRET_KEY=minioadmin    # MinIO 本地默认值，仅开发；生产必须替换
+S3_REGION=us-east-1
+S3_FORCE_PATH_STYLE=1
+```
+
+重启 API 后，管理端“课程管理 → 视频 → custom”可填 `src=/api/v1/media/<key>`；也可直接调 `POST /api/v1/admin/media/presign` 获取预签名 PUT 并上传。
+
+- 端口 9000/9001 被占用时，在 compose 覆盖里改成 `9010:9000` / `9011:9001`，并同步 `S3_ENDPOINT`。
+- 本地媒体在 `data/media`，默认不纳入 git；`docker compose down -v` 不会删除宿主机目录，但会删 MinIO 的 `minio_data` 卷。
+- 不想用 S3 时把 `STORAGE_DRIVER` 改回 `local` 即可，公开页面不受影响。
+
+## 14. SQLite 导入器（本地演练）
+
+`npm run import:sqlite` 把 v1 的 `data/portal.db` 导入到**已迁移**的 PostgreSQL。源库只读打开，写入在单个事务中完成。
+
+```bash
+# 目标：测试库（绝不要用 ai_portal 开发库）
+export DATABASE_URL=postgres://portal:portal@127.0.0.1:5433/ai_portal_test
+npm run db:migrate
+
+# 1. dry-run：只打印计数与差异，不写库
+npm run import:sqlite -- --dry-run
+
+# 2. 正式导入
+npm run import:sqlite
+
+# 3. 校验 golden
+psql "$DATABASE_URL" -c "select
+  (select count(*) from courses) courses,
+  (select count(distinct student_id) from records) students,
+  (select count(*) from records) records,
+  (select count(*) from chapters) chapters;"
+```
+
+选项：
+
+| 选项 | 作用 |
+|---|---|
+| `--db <path>` | 源 SQLite 文件，默认 `data/portal.db` |
+| `--dry-run` | 只校验并打印计数/差异，绝不写库 |
+| `--wipe` | 导入前 `TRUNCATE` 导入器负责的表（**危险**） |
+| `--include-sessions` | 额外导入未过期的会话/令牌（默认跳过） |
+
+- **目标库警告**：`DATABASE_URL` 指向哪里就写哪里。只用 `ai_portal_test` 或一次性临时库；不要指向 `ai_portal`，更不要指向生产库。默认 upsert 不会删除目标库额外数据，只有 `--wipe` 会清空导入器负责的表。
+- 源库缺少可选表（`audit_log`/`mfa_recovery_codes`/`sessions`/`auth_tokens`）不报错；必需表缺失会失败。
+- v1 明文 MFA secret 用 `MFA_ENC_KEY` 加密（开发可留空，自动派生开发密钥；生产必须显式设置）。
+- 重复运行是幂等的（保留 id、upsert）；导入后旧 scrypt 密码可登录并透明升级。
+
+## 15. API 文档（本地）
+
+开发环境默认开放文档，无需改 `.env`：
+
+- Scalar UI：<http://127.0.0.1:8787/api/v1/docs>
+- OpenAPI 3.1：<http://127.0.0.1:8787/api/v1/openapi.json>
+
+生产默认关闭 `/docs`，需 `ENABLE_API_DOCS=1`；`openapi.json` 始终可读。旧 `/api` 前缀同样可访问这两个端点。

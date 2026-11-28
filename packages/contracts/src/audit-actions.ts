@@ -39,6 +39,8 @@ export const AUDIT_ACTIONS = [
   'data.csv_reset',
   'data.csv_exported',
   'data.reset',
+  'data.snapshot_created',
+  'data.snapshot_restored',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -78,6 +80,8 @@ export const AUDIT_ACTION = {
   DATA_CSV_RESET: 'data.csv_reset',
   DATA_CSV_EXPORTED: 'data.csv_exported',
   DATA_RESET: 'data.reset',
+  DATA_SNAPSHOT_CREATED: 'data.snapshot_created',
+  DATA_SNAPSHOT_RESTORED: 'data.snapshot_restored',
 } as const satisfies Record<string, AuditAction>;
 
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS);

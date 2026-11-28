@@ -23,7 +23,8 @@
     "test:e2e": "playwright test",
     "db:generate": "npm run db:generate -w @portal/db",
     "db:migrate": "npm run db:migrate -w @portal/db",
-    "seed": "npm run seed -w @portal/api"
+    "seed": "npm run seed -w @portal/api",
+    "import:sqlite": "tsx apps/api/src/importers/sqlite-to-pg.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

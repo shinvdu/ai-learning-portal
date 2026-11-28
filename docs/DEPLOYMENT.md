@@ -13,7 +13,7 @@
 - Linux x86_64（或 Docker Desktop），Docker Engine 24+ / Docker Compose v2。
 - 2 vCPU / 2 GB 内存 / 10 GB 磁盘起步（演示规模）。
 - 一个域名与 TLS 证书（Let's Encrypt 即可）。
-- 一个可接收 HTTP POST 的邮件网关（生产只支持 `webhook`；SMTP 为 P1）。
+- 一个可用的邮件传输：能接收 HTTP POST 的网关（`MAIL_TRANSPORT=webhook`）或任意 SMTP 中继（`MAIL_TRANSPORT=smtp` + `SMTP_URL`）。
 - 可选：非容器部署需要 Node.js ≥ 24、PostgreSQL 16、Redis 7。
 
 端口约定：
@@ -39,19 +39,28 @@
 | `ADMIN_EMAIL` | 建议显式 | 首个管理员邮箱 |
 | `ADMIN_PASSWORD` | 必填 | 首个管理员密码（≥8 字符）；不会打印到日志 |
 | `MFA_ENC_KEY` | 必填 | AES-256-GCM 密钥材料，任意长随机串经 SHA-256 派生；`openssl rand -base64 32` |
-| `MAIL_TRANSPORT` | 必填非 console | `webhook`（当前生产唯一可用） |
+| `MAIL_TRANSPORT` | 必填非 console | `webhook` 或 `smtp` |
 | `MAIL_WEBHOOK_URL` | webhook 时必填 | 邮件网关 POST 地址 |
 | `MAIL_WEBHOOK_TOKEN` | 可选 | 以 `Authorization: Bearer <token>` 发送 |
+| `SMTP_URL` | smtp 时必填 | SMTP 连接串：`smtp://user:pass@host:587`（STARTTLS）或 `smtps://user:pass@host:465`（隐式 TLS）；密码含特殊字符时需 URL 编码 |
 | `MAIL_FROM` | 可选 | 发件人展示名/地址 |
+| `STORAGE_DRIVER` | `local` | `local`（API 卷上的 `MEDIA_DIR`）或 `s3`（S3/MinIO，多实例共享） |
+| `MEDIA_DIR` | `./data/media` | 本地媒体目录；生产需在持久卷上并可写 |
+| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（约 50 MB） |
+| `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | s3 时必填 | 存储桶与凭据；凭据只在服务端使用，不下发前端 |
+| `S3_ENDPOINT` | MinIO 必填 | 如 `http://minio:9000`（容器内）或 `http://127.0.0.1:9000`；AWS 可省略 |
+| `S3_REGION` | `us-east-1` | S3 区域 |
+| `S3_FORCE_PATH_STYLE` | `1` | MinIO 需路径风格；AWS 可设 `0` |
+| `S3_PUBLIC_URL` | 可选 | 公开媒体域名（CDN/桶公开读）；缺省用预签名 GET |
 | `SEED_DEMO_RECORDS` | 演示 `1`；真实 `0` | 是否导入示例记录 |
 | `ALLOW_DEMO_RESET` | 演示 `1`；真实 `0` | 是否允许管理员“恢复示例数据”与 seed `--reset` |
 | `LOG_LEVEL` | `info` | `fatal/error/warn/info/debug/trace` |
-| `ENABLE_API_DOCS` | `0` | 预留开关（OpenAPI 为 P1） |
+| `ENABLE_API_DOCS` | `0` | 设为 `1` 时生产开放 `GET /api/v1/docs`；`/api/v1/openapi.json` 始终可读 |
 | `SERVE_WEB` | `0` | 生产由 Nginx 托管静态资源 |
 | `TRUST_PROXY` | `1` | 信任 Nginx 的 `X-Forwarded-*` |
 | `POSTGRES_USER/PASSWORD/DB` | 与 `DATABASE_URL` 一致 | 仅 compose 插值使用，不写入 API 容器 |
 
-生产配置在进程启动时由 zod 校验；缺失 `DATABASE_URL`、`REDIS_URL`、`PUBLIC_BASE_URL`、`MFA_ENC_KEY`、`ADMIN_PASSWORD` 或使用 `console` 邮件传输时直接退出。
+生产配置在进程启动时由 zod 校验；缺失 `DATABASE_URL`、`REDIS_URL`、`PUBLIC_BASE_URL`、`MFA_ENC_KEY`、`ADMIN_PASSWORD`、使用 `console` 邮件传输、`MAIL_TRANSPORT=smtp` 却缺 `SMTP_URL`，或 `STORAGE_DRIVER=s3` 却缺 `S3_BUCKET`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` 时直接退出。
 
 ## 3. 生产 Compose
 
@@ -236,9 +245,13 @@ npm start               # SQLite 模式，默认 http://127.0.0.1:8787
 
 v1.2.0 使用 `data/portal.db`，不会读写 v2 的 PostgreSQL。若要回滚 v2 的一次失败升级，优先恢复升级前的 `pg_dump`，再 checkout 上一个 tag。
 
-## 10. 邮件网关
+## 10. 邮件传输（webhook 与 SMTP）
 
-生产仅支持 `webhook`。应用向 `MAIL_WEBHOOK_URL` POST：
+生产必须使用 `webhook` 或 `smtp`，禁止 `console`。两种传输失败都会保留账号并返回 `502 {"code":"MAIL_FAILED"}`。
+
+### 10.1 webhook
+
+应用向 `MAIL_WEBHOOK_URL` POST：
 
 ```json
 {
@@ -253,7 +266,21 @@ v1.2.0 使用 `data/portal.db`，不会读写 v2 的 PostgreSQL。若要回滚 v
 - 配置 `MAIL_WEBHOOK_TOKEN` 时附带 `Authorization: Bearer <token>`。
 - 10 秒超时；非 2xx 视为失败，注册返回 `502 {"error":"账号已创建，但验证邮件发送失败...","code":"MAIL_FAILED"}`。
 - 网关负责 SMTP/API 发送、SPF/DKIM/DMARC、退信与重试。
-- SMTP 内置传输为 P1：设置 `MAIL_TRANSPORT=smtp` 会在启动时明确报错，不会静默降级。
+
+### 10.2 SMTP
+
+内置 SMTP 传输通过 nodemailer 使用 `SMTP_URL`：
+
+```bash
+MAIL_TRANSPORT=smtp
+SMTP_URL='smtps://no-reply%40example.com:app-password@smtp.example.com:465'
+```
+
+- `smtp://host:587` 使用 STARTTLS；`smtps://host:465` 使用隐式 TLS。用户名/密码含 `@`、`/`、`:` 等字符时必须 URL 编码（上例 `no-reply%40example.com`）。
+- `MAIL_TRANSPORT=smtp` 但未设置 `SMTP_URL` 时进程启动即失败，不会静默回退到 webhook 或 console。
+- 发件地址取 `MAIL_FROM`；请确保该域已配置 SPF/DKIM/DMARC，并按服务商要求使用应用专用密码。
+- SMTP 发送失败只记录不含正文的错误日志（日志不会打印验证/重置链接）。
+- 重试队列/退信处理仍不在范围内（见 §12）。
 
 ## 11. MFA 密钥轮换
 
@@ -262,15 +289,89 @@ v1.2.0 使用 `data/portal.db`，不会读写 v2 的 PostgreSQL。若要回滚 v
 - 建议流程：发布通知 → 备份 → 更换 `MFA_ENC_KEY` → 滚动重启 → 逐个重置 MFA。
 - 轮换前不要删除旧密钥记录；当前实现不支持双密钥解密。
 
-## 12. P1 / 未实现项
+## 12. P1 状态
 
-- SMTP 传输（`MAIL_TRANSPORT=smtp`）与退信队列。
-- MinIO/S3 媒体存储；当前媒体为打包静态资源。
-- SQLite → PostgreSQL 导入器（F100）。有 v1 真实数据时必须先完成导入再切换，不能直接复用 v2 种子。
-- OpenAPI/Scalar（`ENABLE_API_DOCS` 仅为预留）。
+已在 `next` 分支实现、尚未发布（详见 [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`）：
+
+- OpenAPI 3.1 + Scalar（见 §14）。
+- CSV 数据集快照与恢复（见 [API.md](API.md) §8）。
+- SMTP 传输（见 §10.2）。
+- local/S3（MinIO）媒体存储（见 §13）。
+- SQLite → PostgreSQL 导入器（见 §15）。
+
+仍不在范围：
+
+- 邮件重试队列与退信处理。
 - WAL/PITR、审计归档与只读副本。
+- Playwright 全量矩阵与覆盖率门禁。
 
-## 13. systemd 备选
+## 13. 媒体存储（local / S3 / MinIO）
+
+`STORAGE_DRIVER=local` 为默认：文件保存在 API 可写的 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 HTTP Range。`STORAGE_DRIVER=s3` 对接 S3/MinIO：应用签发短时预签名 URL（900 秒），浏览器 302 跳转或直传，凭据不进入前端。
+
+```bash
+# 本地驱动（默认）
+STORAGE_DRIVER=local
+MEDIA_DIR=./data/media
+MEDIA_MAX_BYTES=52428800
+
+# S3 / MinIO
+STORAGE_DRIVER=s3
+S3_ENDPOINT=http://minio:9000
+S3_BUCKET=portal-media
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+S3_REGION=us-east-1
+S3_FORCE_PATH_STYLE=1
+# S3_PUBLIC_URL=https://media.example.com   # 可选
+```
+
+MinIO 开发启动（compose `media` profile，主机端口 9000/9001）：
+
+```bash
+docker compose --profile media up -d minio minio-init
+# 控制台 http://127.0.0.1:9001（默认 minioadmin/minioadmin）；minio-init 创建 S3_BUCKET
+```
+
+- 端口 9000/9001 若被占用，可在 compose 覆盖里改端口映射（如 `9010:9000`、`9011:9001`），并同步改 `S3_ENDPOINT`。
+- `MEDIA_DIR` 必须位于持久卷；容器重建不会保留未挂载的本地媒体。S3 多实例共享同一桶。
+- 多实例部署使用 `s3`，否则各实例只看到自己的本地磁盘。
+- **备份策略不变**：`pg_dump` 只覆盖数据库；本地 `MEDIA_DIR` 与 S3 桶需单独备份/开启版本化。数据库恢复后，媒体对象可能需从对象存储或文件备份恢复。
+- 把课程视频指向对象：上传后把课程视频设为 `custom`，`src=/api/v1/media/<key>`（详见 [API.md](API.md) §8 媒体）。
+
+## 14. OpenAPI 与 Scalar 文档
+
+- `GET /api/v1/openapi.json`：OpenAPI 3.1 规范，始终可读、`Cache-Control: no-store`。
+- `GET /api/v1/docs`：Scalar 交互文档，生产默认关闭；设置 `ENABLE_API_DOCS=1` 开放。页面对 jsDelivr 放宽 CSP，其余路由策略不变。
+- 规范包含全部业务路由（含媒体与数据快照）；可用于生成客户端或导入 Postman。
+
+## 15. SQLite 数据导入（v1 → v2）
+
+有 v1 真实数据（`data/portal.db`）时，必须在切换到 v2 前导入；导入器只读打开 SQLite，在单个 PostgreSQL 事务中写入**已迁移**的目标库。
+
+```bash
+# 目标库必须先迁移
+DATABASE_URL='postgres://portal:portal@127.0.0.1:5433/ai_portal_test' npm run db:migrate
+
+# 1. 先 dry-run：只打印计数与差异，不写库
+DATABASE_URL='postgres://portal:portal@127.0.0.1:5433/ai_portal_test' \
+  npm run import:sqlite -- --dry-run
+
+# 2. 正式导入（目标为空库时直接导入；需要清空导入器负责的表时加 --wipe，危险）
+DATABASE_URL='postgres://portal:portal@127.0.0.1:5433/ai_portal_test' \
+  npm run import:sqlite
+
+# 3. 校验 golden：24/5/58/177/30
+```
+
+- 选项：`--db <path>`（默认 `data/portal.db`）、`--dry-run`、`--wipe`（先 `TRUNCATE` 导入器负责的表）、`--include-sessions`（仅导入未过期会话/令牌）、`--help`。也可用 `scripts/import-sqlite.sh`。
+- **目标库警告**：`DATABASE_URL` 指向哪里就写哪里。务必指向 `ai_portal_test` 或专用临时库；**绝不指向 `ai_portal` 开发库或生产库**。默认 upsert 不会删除目标库中导入器表之外或额外的数据，只有 `--wipe` 才会清空这些表。
+- 视频语义按 v1 映射：SQL NULL → `inherit`，JSON 字符串 `"null"` → `none`，对象 → `custom`。
+- v1 明文 MFA secret 会用 `MFA_ENC_KEY` 加密；生产导入前必须设置该变量。
+- 旧 scrypt 密码原样导入，首次登录后透明升级为 Argon2id。
+- 导入完成后指标应与 golden 一致（24 学生 / 5 课程 / 58 选课 / 177 记录 / 30 章）。
+
+## 16. systemd 备选
 
 不使用容器时：
 

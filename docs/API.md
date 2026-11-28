@@ -164,6 +164,7 @@ POST /api/v1/auth/mfa/disable { "password": "..." }
 | GET | `/knowledge/:id` | 课程知识中心文档；无文档时 `knowledge: null` |
 | GET | `/dashboard?course=` | 学习看板数据（KPI、图表分组、洞察、数据质量） |
 | GET | `/insights` | 数据洞察（含公式、常见误区、分课程统计） |
+| GET | `/media/:key` | 读取课程媒体。本地驱动直接流式返回并支持单区间 `Range`（`200`/`206`/`416`）；S3 驱动返回 `302` 到短时有效的预签名 GET。`key` 必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,128}`（无路径穿越） |
 
 - `q` 同时匹配课程名、简介、讲师、分类；`category` 为精确匹配；课程概览不受筛选影响。
 - `dashboard?course=` 为精确课程名；未知课程回退为全站数据，`filter` 返回 `null`。
@@ -214,11 +215,43 @@ curl -s 'http://127.0.0.1:8787/api/v1/chapters/C3/4'
 | POST | `/records` | 新增记录 |
 | PATCH | `/records/:id` | 部分更新；空 body 返回 `400 {"error":"没有需要更新的字段"}` |
 | DELETE | `/records/:id` | 删除记录 |
-| POST | `/records/import` | CSV 导入；JSON `{csv}` 或 `text/csv`；`?dry_run=1` 只校验 |
+| POST | `/records/import` | CSV 导入；JSON `{csv}` 或 `text/csv`；`?dry_run=1` 只校验；导入前自动写快照 |
 | GET | `/export.csv` | 导出 UTF-8 BOM + CRLF 的 `learning_records.csv` |
-| POST | `/admin/reset` | 恢复打包示例数据；生产需 `ALLOW_DEMO_RESET=1` |
+| POST | `/admin/reset` | 恢复打包示例数据；生产需 `ALLOW_DEMO_RESET=1`；重置前自动写快照 |
 
 记录字段：`student_id`、`course_name`（导入/展示，内部映射为 `course_id`）、`learning_date`（`YYYY-MM-DD`）、`learning_minutes`、`chapters_done`、`total_chapters`、`quiz_score`（可为 `null`）。
+
+### 数据集快照
+
+破坏性导入（CSV 导入）与“恢复示例数据”在写入前都会生成快照，可用于回滚误操作。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/dataset/snapshots` | 列出快照（最新在前），字段含 `id`、`reason`、`row_count`、`created_at`；`reason` 为 `csv-import` / `seed-reset` / `pre-restore` |
+| POST | `/admin/dataset/restore/:id` | 恢复到指定快照。响应含 `restored`、`snapshot`、`preRestoreSnapshot`、`dataset`。恢复前会先把当前行保存为 `pre-restore` 快照，因此恢复本身也可再次回滚；未知课程返回 `409`，非法行返回 `400`，快照不存在返回 `404` |
+
+快照与恢复均写审计：`data.snapshot_created`、`data.snapshot_restored`（`data.csv_imported` / `data.reset` 保持原动作名不变）。
+
+### 媒体
+
+`STORAGE_DRIVER=local`（默认）时，文件落在 `MEDIA_DIR`，通过 API 提供 Range 播放；`STORAGE_DRIVER=s3` 时对接 S3/MinIO，凭据只留在服务端。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/admin/media/presign` | 请求体 `{filename, contentType}` → `{key, uploadUrl, publicUrl, expiresIn}`（`expiresIn` 为 900 秒）。S3 返回预签名 PUT；本地返回 `/admin/media/upload?key=...` 上传地址 |
+| POST | `/admin/media/upload?key=&filename=` | 仅本地驱动；原始字节流（`application/octet-stream` 或视频/MIME），受 `MEDIA_MAX_BYTES` 限制，超限 `413`；返回 `201 {key, url}`。S3 模式返回 `400`，应改用 presign |
+
+把课程视频指向媒体对象：在上传得到 `key` 后，用管理后台课程表单把视频模式设为 `custom`，`src` 填站内路径 `/api/v1/media/<key>`（封面同理填 `/api/v1/media/<posterKey>`；`src`/`poster` 必须以 `/` 开头，不接受外站或协议相对地址）。
+
+```bash
+# 本地驱动：上传 mp4（管理员会话，带 CSRF/Origin，同浏览器行为）
+curl -b jar.txt -H "X-CSRF-Token: $(awk '$6=="aip_csrf"{print $7}' jar.txt)" \
+  -H 'Origin: http://127.0.0.1:8787' \
+  -H 'Content-Type: video/mp4' --data-binary @sample.mp4 \
+  'http://127.0.0.1:8787/api/v1/admin/media/upload?filename=sample.mp4'
+# → 201 {"key":"<hex>.mp4","url":"http://.../api/v1/media/<hex>.mp4"}
+curl -r 0-99 -i 'http://127.0.0.1:8787/api/v1/media/<hex>.mp4'   # → 206 Partial Content
+```
 
 ### 审计
 
@@ -235,7 +268,7 @@ curl -s 'http://127.0.0.1:8787/api/v1/chapters/C3/4'
 | 认证 | `auth.register`、`auth.login`、`auth.login_failed`、`auth.login_inactive`、`auth.login_locked`、`auth.mfa_challenge`、`auth.login_mfa`、`auth.mfa_failed`、`auth.email_verified`、`auth.verification_resent`、`auth.verification_mail_failed`、`auth.password_reset_requested`、`auth.password_reset`、`auth.password_changed`、`auth.mfa_setup_started`、`auth.mfa_enabled`、`auth.mfa_disabled`、`auth.logout` |
 | 用户 | `admin.user_created`、`admin.user_updated` |
 | 课程/章节 | `admin.course_created`、`admin.course_updated`、`admin.course_deleted`、`admin.chapter_created`、`admin.chapter_updated`、`admin.chapter_deleted` |
-| 数据 | `data.record_created`、`data.record_updated`、`data.record_deleted`、`data.csv_imported`、`data.csv_exported`、`data.csv_reset`、`data.reset` |
+| 数据 | `data.record_created`、`data.record_updated`、`data.record_deleted`、`data.csv_imported`、`data.csv_exported`、`data.csv_reset`、`data.reset`、`data.snapshot_created`、`data.snapshot_restored` |
 
 ## 10. 健康检查
 
@@ -275,3 +308,23 @@ curl -b jar.txt -c jar.txt \
   -d '{"student_id":"S90","course_name":"Python 数据分析","learning_date":"2026-11-17","learning_minutes":60,"chapters_done":8,"total_chapters":8,"quiz_score":92}' \
   http://127.0.0.1:8787/api/v1/records
 ```
+
+## 13. OpenAPI 与交互式文档
+
+文档端点与 `/api/v1` 同挂载，因此也可经旧 `/api` 前缀访问：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/openapi.json` | OpenAPI 3.1 规范，`application/json` + `Cache-Control: no-store`，**始终可读** |
+| GET | `/docs` | Scalar 交互式文档；`APP_ENV !== 'production'` 或 `ENABLE_API_DOCS=1` 时返回 HTML，否则 `404 {"error":"接口不存在"}` |
+
+- 规范由 `packages/contracts` 用与运行时校验相同的 zod schema 生成，覆盖 41 条路径（认证、公开目录、分析、管理、媒体、数据快照、健康检查），并声明 cookie 会话、`X-CSRF-Token` 与错误 envelope。
+- `GET /api/v1/openapi.json` 始终可读（`no-store`）；`GET /api/v1/docs` 是 Scalar UI，网络侧从 jsDelivr 加载前端资源，该页单独放宽 CSP，其余页面保持严格策略。
+- 生产默认关闭 `/docs`；如需开放，设置 `ENABLE_API_DOCS=1`。开发/测试环境默认开放，无需设置。
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/openapi.json | jq '.openapi, (.paths | keys | length)'
+# → "3.1.0" \n 41
+```
+
+导入 Scalar/Postman：直接以 `http://127.0.0.1:8787/api/v1/openapi.json` 作为规范地址即可。

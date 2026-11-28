@@ -24,6 +24,8 @@ import type {
   CreateUserBody,
   CsrfResponse,
   DashboardResponse,
+  DatasetRestoreResponse,
+  DatasetSnapshotsResponse,
   ImportResponse,
   InsightsResponse,
   KnowledgeResponse,
@@ -273,6 +275,16 @@ export const datasetApi = {
   /** Restores the bundled demo dataset (production may return 403). */
   reset(): Promise<ResetResponse> {
     return apiRequest('/admin/reset', { method: 'POST' });
+  },
+
+  /** Immutable dataset snapshots written before every destructive write. */
+  snapshots(): Promise<DatasetSnapshotsResponse> {
+    return apiRequest('/admin/dataset/snapshots');
+  },
+
+  /** Restore a snapshot (the API snapshots the current rows first). */
+  restore(id: number): Promise<DatasetRestoreResponse> {
+    return apiRequest(`/admin/dataset/restore/${id}`, { method: 'POST' });
   },
 };
 

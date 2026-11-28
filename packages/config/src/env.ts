@@ -12,9 +12,17 @@ export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', '
 export const LogLevelSchema = z.enum(LOG_LEVELS);
 export type LogLevel = z.infer<typeof LogLevelSchema>;
 
+export const STORAGE_DRIVERS = ['local', 's3'] as const;
+export const StorageDriverSchema = z.enum(STORAGE_DRIVERS);
+export type StorageDriver = z.infer<typeof StorageDriverSchema>;
+
 export const DEFAULT_API_PORT = 8787;
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_MAIL_FROM = 'AI Learning Portal <no-reply@example.com>';
+export const DEFAULT_MEDIA_DIR = './data/media';
+export const DEFAULT_MEDIA_MAX_BYTES = 52428800;
+export const DEFAULT_S3_REGION = 'us-east-1';
+export const DEFAULT_S3_FORCE_PATH_STYLE = true;
 export const DEV_DATABASE_URL = 'postgres://portal:portal@127.0.0.1:5433/ai_portal';
 export const DEV_REDIS_URL = 'redis://127.0.0.1:6380/0';
 export const DEV_PUBLIC_BASE_URL = 'http://127.0.0.1:5173';
@@ -38,6 +46,12 @@ const booleanEnv = (defaultValue: boolean) =>
     const parsed = parseBoolean(value);
     return parsed === undefined ? value : parsed;
   }, z.boolean());
+
+const numberEnv = (defaultValue: number) =>
+  z.preprocess(
+    (value) => (value === undefined || value === null || value === '' ? undefined : value),
+    z.coerce.number().int().positive().default(defaultValue),
+  );
 
 const trimmedString = z.string().trim();
 const requiredString = trimmedString.min(1);
@@ -78,6 +92,17 @@ export const EnvSchema = z
     MAIL_WEBHOOK_URL: trimmedString.default(''),
     MAIL_WEBHOOK_TOKEN: z.string().default(''),
     MAIL_FROM: trimmedString.min(1).default(DEFAULT_MAIL_FROM),
+    SMTP_URL: optionalString,
+    STORAGE_DRIVER: StorageDriverSchema.default('local'),
+    MEDIA_DIR: trimmedString.min(1).default(DEFAULT_MEDIA_DIR),
+    MEDIA_MAX_BYTES: numberEnv(DEFAULT_MEDIA_MAX_BYTES),
+    S3_ENDPOINT: optionalString,
+    S3_REGION: trimmedString.min(1).default(DEFAULT_S3_REGION),
+    S3_BUCKET: optionalString,
+    S3_ACCESS_KEY: optionalString,
+    S3_SECRET_KEY: optionalString,
+    S3_FORCE_PATH_STYLE: booleanEnv(DEFAULT_S3_FORCE_PATH_STYLE),
+    S3_PUBLIC_URL: optionalString,
     SEED_DEMO_RECORDS: booleanEnv(true),
     ALLOW_DEMO_RESET: booleanEnv(true),
     LOG_LEVEL: LogLevelSchema.default('info'),
@@ -117,6 +142,36 @@ export const EnvSchema = z
         path: ['MAIL_WEBHOOK_URL'],
         message: 'MAIL_TRANSPORT=webhook 时必须设置 MAIL_WEBHOOK_URL',
       });
+    } else if (env.MAIL_TRANSPORT === 'smtp' && !env.SMTP_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMTP_URL'],
+        message: 'MAIL_TRANSPORT=smtp 时必须设置 SMTP_URL',
+      });
+    }
+
+    if (env.STORAGE_DRIVER === 's3') {
+      if (!env.S3_BUCKET) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['S3_BUCKET'],
+          message: 'STORAGE_DRIVER=s3 时必须设置 S3_BUCKET',
+        });
+      }
+      if (!env.S3_ACCESS_KEY) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['S3_ACCESS_KEY'],
+          message: 'STORAGE_DRIVER=s3 时必须设置 S3_ACCESS_KEY',
+        });
+      }
+      if (!env.S3_SECRET_KEY) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['S3_SECRET_KEY'],
+          message: 'STORAGE_DRIVER=s3 时必须设置 S3_SECRET_KEY',
+        });
+      }
     }
   });
 
@@ -174,6 +229,13 @@ export function parseEnv(env: Record<string, string | undefined> = runtimeEnv())
       problems.push('生产环境必须配置可用的邮件传输（webhook 或 smtp）');
     } else if (input.MAIL_TRANSPORT === 'webhook' && !input.MAIL_WEBHOOK_URL) {
       problems.push('MAIL_TRANSPORT=webhook 时必须设置 MAIL_WEBHOOK_URL');
+    } else if (input.MAIL_TRANSPORT === 'smtp' && !input.SMTP_URL) {
+      problems.push('MAIL_TRANSPORT=smtp 时必须设置 SMTP_URL');
+    }
+    if (input.STORAGE_DRIVER === 's3') {
+      for (const key of ['S3_BUCKET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY'] as const) {
+        if (!input[key]) problems.push(`STORAGE_DRIVER=s3 时必须设置 ${key}`);
+      }
     }
     if (problems.length > 0) {
       throw new Error(`生产环境配置不完整：\n- ${problems.join('\n- ')}`);

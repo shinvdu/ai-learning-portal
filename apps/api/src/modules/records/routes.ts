@@ -161,7 +161,11 @@ recordsRouter.post('/records/import', requireAdmin, async (req, res) => {
   const { db } = appDeps(req);
   const { csv, dryRun } = readImportPayload(req);
 
-  const result = await importCsv(db, csv, { source: 'csv-import', dryRun });
+  const result = await importCsv(db, csv, {
+    source: 'csv-import',
+    dryRun,
+    actorEmail: req.user?.email ?? null,
+  });
   const dataset = await readDatasetMeta(db);
 
   if (!dryRun) {
@@ -169,6 +173,17 @@ recordsRouter.post('/records/import', requireAdmin, async (req, res) => {
       targetType: 'dataset',
       details: { inserted: result.inserted, skipped: result.skipped },
     });
+    if (result.snapshotId) {
+      await auditRequest(req, db, AUDIT_ACTION.DATA_SNAPSHOT_CREATED, {
+        targetType: 'snapshot',
+        targetId: result.snapshotId,
+        details: {
+          reason: 'csv-import',
+          rowCount: result.snapshotRowCount ?? null,
+          importId: result.importId ?? null,
+        },
+      });
+    }
   }
 
   res.status(result.ok ? 200 : 400).json({ ...result, dataset });

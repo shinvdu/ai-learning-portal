@@ -30,6 +30,49 @@ describe('parseEnv (development)', () => {
     expect(env.SERVE_WEB).toBe(true);
     expect(env.TRUST_PROXY).toBe(false);
     expect(env.ENABLE_API_DOCS).toBe(false);
+    expect(env.SMTP_URL).toBeUndefined();
+    expect(env.STORAGE_DRIVER).toBe('local');
+    expect(env.MEDIA_DIR).toBe('./data/media');
+    expect(env.MEDIA_MAX_BYTES).toBe(52428800);
+    expect(env.S3_ENDPOINT).toBeUndefined();
+    expect(env.S3_REGION).toBe('us-east-1');
+    expect(env.S3_BUCKET).toBeUndefined();
+    expect(env.S3_ACCESS_KEY).toBeUndefined();
+    expect(env.S3_SECRET_KEY).toBeUndefined();
+    expect(env.S3_FORCE_PATH_STYLE).toBe(true);
+    expect(env.S3_PUBLIC_URL).toBeUndefined();
+  });
+
+  it('coerces media and storage overrides', () => {
+    const env = parseEnv({
+      APP_ENV: 'development',
+      STORAGE_DRIVER: 's3',
+      MEDIA_DIR: '/srv/media',
+      MEDIA_MAX_BYTES: '1024',
+      S3_ENDPOINT: 'http://127.0.0.1:9000',
+      S3_REGION: 'eu-west-1',
+      S3_BUCKET: 'portal-media',
+      S3_ACCESS_KEY: 'minio',
+      S3_SECRET_KEY: 'minio-secret',
+      S3_FORCE_PATH_STYLE: '0',
+      S3_PUBLIC_URL: 'http://127.0.0.1:9000/portal-media',
+      SMTP_URL: 'smtp://user:pass@smtp.example.com:587',
+    });
+
+    expect(env.STORAGE_DRIVER).toBe('s3');
+    expect(env.MEDIA_DIR).toBe('/srv/media');
+    expect(env.MEDIA_MAX_BYTES).toBe(1024);
+    expect(env.S3_ENDPOINT).toBe('http://127.0.0.1:9000');
+    expect(env.S3_REGION).toBe('eu-west-1');
+    expect(env.S3_BUCKET).toBe('portal-media');
+    expect(env.S3_FORCE_PATH_STYLE).toBe(false);
+    expect(env.SMTP_URL).toBe('smtp://user:pass@smtp.example.com:587');
+  });
+
+  it('keeps the default media size for empty or invalid values', () => {
+    expect(() => parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: '' })).not.toThrow();
+    expect(parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: '' }).MEDIA_MAX_BYTES).toBe(52428800);
+    expect(() => parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: 'not-a-number' })).toThrow();
   });
 });
 
@@ -62,6 +105,73 @@ describe('parseEnv (production)', () => {
       SERVE_WEB: false,
       TRUST_PROXY: true,
     });
+  });
+
+  it('requires SMTP_URL when MAIL_TRANSPORT=smtp', () => {
+    const base = {
+      APP_ENV: 'production',
+      DATABASE_URL: 'postgres://portal:portal@db:5432/ai_portal',
+      REDIS_URL: 'redis://redis:6379/0',
+      PUBLIC_BASE_URL: 'https://learning.example.com',
+      ADMIN_PASSWORD: 'a-long-random-password',
+      MFA_ENC_KEY: 'unused-test-key',
+      MAIL_TRANSPORT: 'smtp',
+    };
+
+    expect(() => parseEnv(base)).toThrow(/SMTP_URL/);
+    expect(() => parseEnv({ ...base, SMTP_URL: '' })).toThrow(/SMTP_URL/);
+    expect(parseEnv({ ...base, SMTP_URL: 'smtp://user:pass@relay.example.com:587' })).toMatchObject({
+      MAIL_TRANSPORT: 'smtp',
+      SMTP_URL: 'smtp://user:pass@relay.example.com:587',
+    });
+  });
+
+  it('requires S3 credentials when STORAGE_DRIVER=s3', () => {
+    const base = {
+      APP_ENV: 'production',
+      DATABASE_URL: 'postgres://portal:portal@db:5432/ai_portal',
+      REDIS_URL: 'redis://redis:6379/0',
+      PUBLIC_BASE_URL: 'https://learning.example.com',
+      ADMIN_PASSWORD: 'a-long-random-password',
+      MFA_ENC_KEY: 'unused-test-key',
+      MAIL_TRANSPORT: 'webhook',
+      MAIL_WEBHOOK_URL: 'https://mail.example.com/send',
+      STORAGE_DRIVER: 's3',
+    };
+
+    expect(() => parseEnv(base)).toThrow(/S3_BUCKET/);
+    expect(() => parseEnv({ ...base, S3_BUCKET: 'bucket' })).toThrow(/S3_ACCESS_KEY|S3_SECRET_KEY/);
+    expect(() =>
+      parseEnv({ ...base, S3_BUCKET: 'bucket', S3_ACCESS_KEY: 'key', S3_SECRET_KEY: 'secret' }),
+    ).not.toThrow();
+    expect(() =>
+      parseEnv({
+        ...base,
+        S3_BUCKET: 'bucket',
+        S3_ACCESS_KEY: 'key',
+        S3_SECRET_KEY: 'secret',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_FORCE_PATH_STYLE: '1',
+      }),
+    ).not.toThrow();
+  });
+
+  it('defaults storage to local even in production', () => {
+    const env = parseEnv({
+      APP_ENV: 'production',
+      DATABASE_URL: 'postgres://portal:portal@db:5432/ai_portal',
+      REDIS_URL: 'redis://redis:6379/0',
+      PUBLIC_BASE_URL: 'https://learning.example.com',
+      ADMIN_PASSWORD: 'a-long-random-password',
+      MFA_ENC_KEY: 'unused-test-key',
+      MAIL_TRANSPORT: 'webhook',
+      MAIL_WEBHOOK_URL: 'https://mail.example.com/send',
+    });
+
+    expect(env.STORAGE_DRIVER).toBe('local');
+    expect(env.MEDIA_DIR).toBe('./data/media');
+    expect(env.MEDIA_MAX_BYTES).toBe(52428800);
+    expect(env.S3_FORCE_PATH_STYLE).toBe(true);
   });
 });
 

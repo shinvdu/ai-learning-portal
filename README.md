@@ -26,7 +26,7 @@
 - [API](#api)
 - [项目结构](#项目结构)
 - [开发与测试](#开发与测试)
-- [P1 范围与已知限制](#p1-范围与已知限制)
+- [P1 能力与已知限制](#p1-能力与已知限制)
 - [许可证](#许可证)
 
 ---
@@ -41,7 +41,9 @@
 - **数据洞察**：由记录动态生成的洞察、指标公式表、常见口径误区。
 - **认证**：邮箱注册/登录/退出、邮箱验证、忘记/重置密码、TOTP MFA + 一次性恢复码、按账号锁定。
 - **安全**：Argon2id 密码哈希（旧 scrypt 登录后透明升级）、PostgreSQL 会话（仅存 SHA-256）、CSRF 双提交 Cookie + 同源校验、Redis 固定窗口限流。
-- **管理后台**：用户管理（角色/启停/密码/MFA/解锁）、课程与章节管理（视频三态）、审计日志、学习记录 CRUD、CSV 导入/导出/恢复示例数据。
+- **管理后台**：用户管理（角色/启停/密码/MFA/解锁）、课程与章节管理（视频三态）、审计日志、学习记录 CRUD、CSV 导入/导出/恢复示例数据，以及**数据快照**：每次导入/重置前自动快照，可一键恢复到任一快照（恢复本身也可回滚）。
+- **API 文档**：由 zod 契约生成的 OpenAPI 3.1 规范（`/api/v1/openapi.json`）与 Scalar 交互式文档（`/api/v1/docs`）；生产可用 `ENABLE_API_DOCS` 开关。
+- **媒体与邮件**：课程媒体支持本地磁盘或 S3/MinIO 两种存储驱动（`STORAGE_DRIVER`），邮件支持 webhook 或内置 SMTP（`MAIL_TRANSPORT=smtp`）。
 - **运维**：Docker Compose 开发/生产编排、Nginx TLS/SPA/限流、`/healthz` 与 `/readyz`、结构化日志与 `X-Request-Id`、`pg_dump` 备份与恢复脚本。
 
 ## 技术栈
@@ -124,6 +126,7 @@ npm run seed                          # 开发环境默认导入 177 条示例�
 
 - Web：<http://127.0.0.1:5173>（Vite 将 `/api` 代理到 `http://127.0.0.1:8787`）
 - API：<http://127.0.0.1:8787>，健康检查 `/healthz`、`/readyz`
+- API 文档：<http://127.0.0.1:8787/api/v1/docs>（Scalar）；规范 <http://127.0.0.1:8787/api/v1/openapi.json>。开发/测试默认开放，生产需 `ENABLE_API_DOCS=1`。
 - 默认管理员由 `.env` 的 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 决定（`.env.example` 是 `admin@example.com` / `change-me-before-use` 占位；本机当前值见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，仅限本地，演示/生产前必须更换）
 
 只启动 API：`npm run dev -w @portal/api`；只启动 Web：`npm run dev -w @portal/web`。
@@ -183,14 +186,14 @@ v1.2.0 的数据为 `data/portal.db`（SQLite），与 v2 的 PostgreSQL 数据�
 
 - 规范前缀 `/api/v1`；旧 `/api` 别名复用同一 router，仅增加 `Deprecation: true` 与 `Link: <...>; rel="successor-version"`。
 - 会话 Cookie + CSRF、错误封装、分页、全部端点表、审计动作与示例见 [docs/API.md](docs/API.md)。
-- OpenAPI/Scalar 文档为 P1（尚未实现）；`ENABLE_API_DOCS` 为预留开关。
+- OpenAPI 3.1：`GET /api/v1/openapi.json` 始终可读；Scalar 文档 `GET /api/v1/docs` 在非生产环境或 `ENABLE_API_DOCS=1` 时开放，否则 404。媒体（`/media/{key}`）与数据快照端点也包含在规范中。
 
 ## 项目结构
 
 ```
 .
 ├── apps/
-│   ├── api/                 Express 5 API、seed CLI、集成测试
+│   ├── api/                 Express 5 API、seed CLI、媒体/OpenAPI 模块、SQLite 导入器、集成测试
 │   │   └── Dockerfile       Debian slim + 非 root；Argon2 预编译依赖
 │   └── web/                 Vue 3 + Vite SPA
 │       ├── nginx/           容器内 HTTP 静态 + /api 代理
@@ -206,10 +209,10 @@ v1.2.0 的数据为 `data/portal.db`（SQLite），与 v2 的 PostgreSQL 数据�
 │   ├── env.example          生产环境模板（占位值）
 │   ├── nginx/               边缘 TLS/HSTS/SPA/限流示例
 │   └── systemd/             systemd 单元
-├── scripts/                 backup.sh / restore.sh / healthcheck.sh
+├── scripts/                 backup.sh / restore.sh / healthcheck.sh / import-sqlite.sh
 ├── e2e/                     Playwright 冒烟
 ├── docs/                    架构、决策、API、部署、演示、就绪度
-├── compose.yml              开发编排（postgres 5433 / redis 6380）
+├── compose.yml              开发编排（postgres 5433 / redis 6380；可选 MinIO `media` profile）
 └── package.json             npm workspaces 脚本
 ```
 
@@ -227,18 +230,33 @@ npm run test:e2e      # Playwright 冒烟
 - 演示数据的完整流程与验收清单见 [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md)。
 - 每次发布前后的检查清单见 [docs/RELEASE_NOTES_v2.0.0.md](docs/RELEASE_NOTES_v2.0.0.md)。
 
-## P1 范围与已知限制
+## P1 能力与已知限制
 
-v2.0.0 明确延后（不影响核心验收）：
+以下 P1 能力已在 `next` 分支实现，**尚未发布**（`v2.0.0` 仍是最新发布版本）：
 
-- OpenAPI 规范与 Scalar 交互文档（F036）
-- CSV 数据集快照与撤销（F064）
-- 内置 SMTP 传输（当前只有 `webhook` 与开发用 `console`）
-- MinIO/S3 媒体存储（当前媒体为打包静态资源）
-- SQLite → PostgreSQL 导入器（F100，现有真实数据上生产前必须先完成）
-- Playwright 全量矩阵与覆盖率门禁（当前为 CI 冒烟）
+- **OpenAPI + Scalar（F036）**：`/api/v1/openapi.json` 与 `/api/v1/docs`，见 [API 文档](docs/API.md)。
+- **CSV 快照与恢复（F064）**：导入/重置前自动快照，管理后台“数据快照”标签可恢复，见 [API 文档](docs/API.md)与[部署指南](docs/DEPLOYMENT.md)。
+- **SMTP（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`，见[部署指南](docs/DEPLOYMENT.md)。
+- **媒体 local/S3（F094）**：`STORAGE_DRIVER` + `S3_*`，开发可用 MinIO `media` profile，见[本地开发](docs/DEVELOPMENT.md)。
+- **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite`，先用 `--dry-run`，见[本地开发](docs/DEVELOPMENT.md)。
 
-同时不在范围内：SSO/OIDC/SAML、SCIM、多租户、资源级权限、审计保留/归档/WORM、Metrics/Tracing APM、强制管理员 MFA、WAL/PITR、CSP nonce。
+新增环境变量（完整默认值与生产要求见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 与 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `ENABLE_API_DOCS` | `0` | 生产开放 `/api/v1/docs`；非生产默认已开放 |
+| `MAIL_TRANSPORT` | `console`（开发） | `webhook` / `smtp` / `console`；生产禁止 `console` |
+| `SMTP_URL` | 空 | `MAIL_TRANSPORT=smtp` 时必填，`smtp://` 或 `smtps://` |
+| `STORAGE_DRIVER` | `local` | `local` 或 `s3` |
+| `MEDIA_DIR` | `./data/media` | 本地媒体目录 |
+| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（约 50 MB） |
+| `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 空 | `STORAGE_DRIVER=s3` 时必填；密钥仅服务端使用 |
+| `S3_ENDPOINT` | 空 | MinIO 必填（如 `http://127.0.0.1:9000`）；AWS 可省略 |
+| `S3_REGION` | `us-east-1` | S3 区域 |
+| `S3_FORCE_PATH_STYLE` | `1` | MinIO 需要路径风格访问 |
+| `S3_PUBLIC_URL` | 空 | 可选的公开媒体域名，缺省用预签名 URL |
+
+仍延后：Playwright 全量矩阵与覆盖率门禁（当前为 CI 冒烟）。同时不在范围内：SSO/OIDC/SAML、SCIM、多租户、资源级权限、审计保留/归档/WORM、Metrics/Tracing APM、强制管理员 MFA、WAL/PITR、CSP nonce。
 
 详细风险与完成定义见 [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)。
 

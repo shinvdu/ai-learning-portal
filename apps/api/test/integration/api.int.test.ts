@@ -12,7 +12,8 @@ import type { Express } from 'express';
 import { Redis } from 'ioredis';
 import { DEMO_VIDEO } from '@portal/content';
 import { generateTotp } from '@portal/domain';
-import type { Db } from '@portal/db';
+import { eq } from 'drizzle-orm';
+import { recordSnapshots, type Db } from '@portal/db';
 import { createApp } from '../../src/app.js';
 import { createLogger } from '../../src/lib/logger.js';
 import type { AppConfig } from '../../src/config.js';
@@ -988,5 +989,133 @@ describe('admin data operations', () => {
 
     const capped = await adminRequest(adminCookie, 'get', '/admin/audit?limit=999').expect(200);
     expect(capped.body.limit).toBe(200);
+  });
+});
+/* ----------------------------- dataset snapshots ---------------------------- */
+
+describe('dataset snapshots and restore (F064)', () => {
+  it('snapshots a CSV import, restores it, and can undo the restore', async () => {
+    const adminCookie = await adminLogin();
+
+    // Normalise to the golden fixture first; this also writes a seed-reset
+    // snapshot that the import below must not disturb.
+    await adminRequest(adminCookie, 'post', '/admin/reset').expect(200);
+
+    const twoRows =
+      `${SEED_CSV_HEADER}\r\n` +
+      'S901,生成式 AI 基础,2026-11-18,30,1,6,80\r\n' +
+      'S902,Python 数据分析,2026-11-19,45,2,8,\r\n';
+    const imported = await adminRequest(adminCookie, 'post', '/records/import')
+      .set('Content-Type', 'text/csv')
+      .send(twoRows)
+      .expect(200);
+    expect(imported.body).toMatchObject({ ok: true, inserted: 2, skipped: 0, total: 2 });
+    expect(imported.body.snapshotId).toEqual(expect.any(Number));
+    expect(imported.body.snapshotRowCount).toBe(177);
+    expect(imported.body.importId).toEqual(expect.any(Number));
+
+    const listed = await adminRequest(adminCookie, 'get', '/admin/dataset/snapshots').expect(200);
+    const snapshots = listed.body.snapshots as {
+      id: number;
+      reason: string;
+      row_count: number;
+      actor_email: string | null;
+    }[];
+    const importSnapshot = snapshots.find((snapshot) => snapshot.id === imported.body.snapshotId);
+    expect(importSnapshot).toMatchObject({
+      reason: 'csv-import',
+      row_count: 177,
+      actor_email: TEST_ADMIN_EMAIL,
+    });
+    expect(snapshots.some((snapshot) => snapshot.reason === 'seed-reset')).toBe(true);
+
+    const restored = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/dataset/restore/${imported.body.snapshotId}`,
+    ).expect(200);
+    expect(restored.body).toMatchObject({ ok: true, restored: 177 });
+    expect(restored.body.snapshot).toMatchObject({ id: imported.body.snapshotId, reason: 'csv-import' });
+    expect(restored.body.preRestoreSnapshot).toMatchObject({ reason: 'pre-restore', row_count: 2 });
+
+    // Golden metrics are back exactly.
+    const meta = await request(app).get(v1('/meta')).expect(200);
+    expect(meta.body.overview).toMatchObject({
+      students: 24,
+      courses: 5,
+      enrollments: 58,
+      records: 177,
+      avgCompletion: 74.3,
+      avgScore: 86.4,
+      totalHours: 165.3,
+    });
+
+    // The restore pre-snapshot makes the restore itself reversible.
+    const undo = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/dataset/restore/${restored.body.preRestoreSnapshot.id}`,
+    ).expect(200);
+    expect(undo.body).toMatchObject({ ok: true, restored: 2 });
+    const two = await adminRequest(adminCookie, 'get', '/records?limit=5').expect(200);
+    expect(two.body.total).toBe(2);
+
+    const audit = await adminRequest(
+      adminCookie,
+      'get',
+      '/admin/audit?action=data.snapshot_restored',
+    ).expect(200);
+    expect(audit.body.total).toBeGreaterThanOrEqual(2);
+
+    // Leave the database in the seeded state for any later suite.
+    await adminRequest(adminCookie, 'post', '/admin/reset').expect(200);
+  });
+
+  it('writes a seed-reset snapshot before resetting the demo data', async () => {
+    const adminCookie = await adminLogin();
+
+    const before = await adminRequest(adminCookie, 'get', '/records?limit=1').expect(200);
+    const reset = await adminRequest(adminCookie, 'post', '/admin/reset').expect(200);
+    expect(reset.body).toMatchObject({ ok: true, inserted: 177 });
+    expect(reset.body.snapshotId).toEqual(expect.any(Number));
+
+    const listed = await adminRequest(adminCookie, 'get', '/admin/dataset/snapshots').expect(200);
+    const snapshot = (listed.body.snapshots as { id: number; reason: string; row_count: number }[]).find(
+      (row) => row.id === reset.body.snapshotId,
+    );
+    expect(snapshot).toMatchObject({ reason: 'seed-reset', row_count: before.body.total });
+  });
+
+  it('rejects restoring a snapshot whose course no longer exists with 409', async () => {
+    const adminCookie = await adminLogin();
+    const [inserted] = await db
+      .insert(recordSnapshots)
+      .values({
+        reason: 'test',
+        row_count: 1,
+        rows: [
+          {
+            student_id: 'S999',
+            course_name: '不存在的课程',
+            learning_date: '2026-11-20',
+            learning_minutes: 10,
+            chapters_done: 1,
+            total_chapters: 3,
+            quiz_score: null,
+          },
+        ],
+      })
+      .returning({ id: recordSnapshots.id });
+    const snapshotId = inserted!.id;
+    try {
+      const res = await adminRequest(
+        adminCookie,
+        'post',
+        `/admin/dataset/restore/${snapshotId}`,
+      ).expect(409);
+      expect(res.body.error).toContain('课程不存在');
+    } finally {
+      await db.delete(recordSnapshots).where(eq(recordSnapshots.id, snapshotId));
+    }
   });
 });

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+P1 增强已在 `next` 分支实现，**尚未发布**；`v2.0.0` 仍是最新发布版本。
+
+### Added
+
+- **OpenAPI 规范与 Scalar 文档（F036）**：`GET /api/v1/openapi.json` 返回由 zod 契约生成的 OpenAPI 3.1 规范（41 条路径，含媒体与数据快照）；`GET /api/v1/docs` 提供 Scalar 交互式文档。开发/测试默认开放，生产需显式 `ENABLE_API_DOCS=1`。旧 `/api` 别名同样可访问。
+- **CSV 数据集快照与恢复（F064）**：CSV 导入与“恢复示例数据”前自动写入 `record_snapshots`；管理后台新增“数据快照”标签页；`GET /api/v1/admin/dataset/snapshots` 列出快照，`POST /api/v1/admin/dataset/restore/:id` 恢复某个快照。恢复前会先把当前行保存为 `pre-restore` 快照，因此恢复本身也可再次回滚。
+- **SMTP 邮件传输（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（`smtp://` 或 `smtps://` 隐式 TLS），通过 nodemailer 发送；`SMTP_URL` 缺失时启动失败，不会静默降级。
+- **媒体存储 local / S3（F094）**：`STORAGE_DRIVER=local|s3`。本地驱动使用 `MEDIA_DIR` 与 `MEDIA_MAX_BYTES`；S3 驱动使用 `S3_*`（MinIO/AWS）。新增公开读取 `GET /api/v1/media/:key`（本地 Range 200/206/416，S3 返回 302 预签名跳转）、`POST /api/v1/admin/media/presign`、`POST /api/v1/admin/media/upload`。开发 compose 新增 `media` profile 运行 MinIO（主机 9000/9001）。
+- **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite` / `scripts/import-sqlite.sh`，支持 `--dry-run`（只校验、不写库）、`--wipe`（先清空导入器负责的表）、`--include-sessions`；只读打开 v1 `data/portal.db`，在单个 PostgreSQL 事务中写入已迁移的目标库。
+
+### Changed
+
+- `ENABLE_API_DOCS` 现在实际控制生产环境的 `/api/v1/docs`（此前为预留开关）；`/api/v1/openapi.json` 始终可读。
+- 生产配置校验新增：`MAIL_TRANSPORT=smtp` 需要 `SMTP_URL`；`STORAGE_DRIVER=s3` 需要 `S3_BUCKET`、`S3_ACCESS_KEY`、`S3_SECRET_KEY`。
+- 审计新增动作 `data.snapshot_created`、`data.snapshot_restored`（只追加语义不变）。
+
 ## [2.0.0] - 2026-11-28
 
 产品级重写。`v1.2.0` 标签继续保留为零依赖、SQLite 的离线教学版，可按 tag 检出运行。

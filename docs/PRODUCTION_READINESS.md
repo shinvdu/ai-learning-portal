@@ -2,7 +2,7 @@
 
 > 本文评估 AI Learning Portal v2 从“演示 / 受控试点”走向“生产可用”的状态、遗留风险与完成定义。
 >
-> **当前结论**：v2.0.0 的 P0 范围已完成，可作为**单节点或多实例受控生产基线**（PostgreSQL + Redis + Nginx + 备份）。P1 项目与若干组织级控制仍未完成，**不应在未完成数据导入与合规评审的情况下直接作为公网 SaaS**。
+> **当前结论**：v2.0.0 的 P0 范围已完成，可作为**单节点或多实例受控生产基线**（PostgreSQL + Redis + Nginx + 备份）。P1 核心项（OpenAPI/Scalar、CSV 快照与恢复、SMTP、local/S3 媒体、SQLite 导入器）已在 `next` 分支实现但**尚未发布**；Playwright 全量矩阵与若干组织级控制仍未完成，**不应在未完成数据导入演练与合规评审的情况下直接作为公网 SaaS**。
 
 - 架构与验收基线：[ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)
 - 选型与取舍：[DECISIONS.md](DECISIONS.md)
@@ -58,15 +58,17 @@
 - [x] CI：quality（typecheck/lint/build）、test（PG/Redis + Vitest）、e2e（Playwright 冒烟）。
 - [x] 优雅退出：SIGTERM/SIGINT 停止接收、10 秒排空、关闭 pool/Redis。
 
-## 2. P1：延后（不阻塞 v2.0.0）
+## 2. P1：状态（已在 `next` 实现，尚未发布）
+
+v2.0.0 发布后，P1 核心项已在 `next` 分支实现（变更见 [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`）：下面的数据路径与运维缺口已补齐，但**这些能力尚未随版本发布**；发布前仍需完成对应验收与发布清单。
 
 | 项 | 状态 | 影响 / 触发条件 |
 |---|---|---|
-| OpenAPI 规范 + Scalar（F036） | 未实现；`ENABLE_API_DOCS` 为预留 | 当前以 [API.md](API.md) 为准 |
-| CSV 数据集快照与撤销（F064） | 未实现 | 误导入后只能恢复示例数据或从备份还原 |
-| 内置 SMTP 传输 | 未实现；`MAIL_TRANSPORT=smtp` 启动即报错 | 生产暂用 webhook 网关 |
-| MinIO/S3 媒体（F094） | 未实现；媒体为打包静态资源 | 大文件/多实例共享媒体需补 |
-| SQLite → PostgreSQL 导入器（F100） | 未实现 | **有 v1 真实数据时，上生产前必须先完成** |
+| OpenAPI 规范 + Scalar（F036） | 已实现：`/api/v1/openapi.json` 始终可读，`/api/v1/docs` 生产需 `ENABLE_API_DOCS=1` | 见 [API.md](API.md) §13 |
+| CSV 数据集快照与恢复（F064） | 已实现：导入/重置前自动快照，`/admin/dataset/snapshots`、`/admin/dataset/restore/:id`，管理后台“数据快照”标签 | 误导入可从快照恢复；超大库仍建议物理备份 |
+| 内置 SMTP 传输 | 已实现：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（nodemailer） | 仍无重试队列/退信处理 |
+| MinIO/S3 媒体（F094） | 已实现：`STORAGE_DRIVER=local|s3`，`/api/v1/media/:key` 支持 Range/预签名；开发 compose `media` profile 提供 MinIO | 媒体对象不在 `pg_dump` 中，需单独备份（见 [DEPLOYMENT.md](DEPLOYMENT.md) §13） |
+| SQLite → PostgreSQL 导入器（F100） | 已实现：`npm run import:sqlite`，支持 `--dry-run`/`--wipe`/`--include-sessions` | **有 v1 真实数据时，上生产前必须先完成并核对 golden** |
 | Playwright 全量矩阵/覆盖率门禁 | CI 仅冒烟 | 回归保障依赖手工验收与截图 |
 | WAL/PITR | 未实现 | RPO = 最近一次 `pg_dump` |
 | 审计归档/保留/WORM | 未实现 | 合规场景需外部归档 |
@@ -79,11 +81,12 @@
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 邮件网关单点 | 注册/重置失败 | 网关多副本、监控、失败审计 `auth.verification_mail_failed`；SMTP 为 P1 |
+| 邮件网关单点 | 注册/重置失败 | 网关多副本、监控、失败审计 `auth.verification_mail_failed`；`next` 已提供 SMTP 备用传输（§2） |
 | Redis 故障 | 限流降级、`/readyz` 503 | 进程内回退保证可用；监控 readiness；生产部署 Redis 持久化 |
 | `MFA_ENC_KEY` 轮换 | 现有 MFA 失效 | 轮换需配合批量 `resetMfa`；流程见 [DEPLOYMENT.md](DEPLOYMENT.md) §11 |
 | 迁移无自动回滚 | 失败升级 | 升级前 `backup.sh`；回滚用备份或旧 tag |
 | 单区域单库 | 故障中断 | 定期备份异地存放；资源级监控；必要时只读副本（未实现） |
+| 媒体未纳入 `pg_dump` | 仅恢复数据库后媒体丢失/失效 | `MEDIA_DIR` 文件备份或 S3 桶版本化；恢复流程同时恢复媒体（[DEPLOYMENT.md](DEPLOYMENT.md) §13） |
 | 会话表增长 | 查询变慢 | 启动清理过期会话 + `expires_at` 索引；需周期性 purge |
 | 演示数据混入生产 | 指标失真 | 真实部署去掉 `--demo-records`，`SEED_DEMO_RECORDS=0`、`ALLOW_DEMO_RESET=0` |
 | 公开注册 | 滥用 | 生产需邮箱验证；可在边缘封禁 `/api/v1/auth/register` 并改用管理员建号 |

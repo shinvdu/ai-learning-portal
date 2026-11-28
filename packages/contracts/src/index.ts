@@ -14,3 +14,4 @@ export * from './dashboard.js';
 export * from './audit.js';
 export * from './users.js';
 export * from './dataset.js';
+export * from './openapi.js';

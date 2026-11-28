@@ -26,7 +26,7 @@
 - [API](#api)
 - [Project layout](#project-layout)
 - [Development and testing](#development-and-testing)
-- [P1 scope and known limitations](#p1-scope-and-known-limitations)
+- [P1 capabilities and known limitations](#p1-capabilities-and-known-limitations)
 - [License](#license)
 
 ---
@@ -41,7 +41,9 @@
 - **Data insights**: records-driven insights, a metric formula table and common metric pitfalls.
 - **Authentication**: email registration/login/logout, email verification, forgot/reset password, TOTP MFA with one-time recovery codes, per-account lockout.
 - **Security**: Argon2id hashing (legacy scrypt upgrades transparently on login), PostgreSQL sessions (SHA-256 only), CSRF double-submit cookie + same-origin checks, Redis fixed-window rate limiting.
-- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (three-state video), audit log, learning-record CRUD, CSV import/export and demo-data reset.
+- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (three-state video), audit log, learning-record CRUD, CSV import/export and demo-data reset, plus **dataset snapshots**: every import/reset is snapshotted first and any snapshot can be restored with one click (a restore is itself reversible).
+- **API docs**: an OpenAPI 3.1 spec generated from the zod contracts (`/api/v1/openapi.json`) and a Scalar reference UI (`/api/v1/docs`), gated in production by `ENABLE_API_DOCS`.
+- **Media and mail**: course media on local disk or S3/MinIO (`STORAGE_DRIVER`), and mail over webhook or built-in SMTP (`MAIL_TRANSPORT=smtp`).
 - **Operations**: Docker Compose dev/prod stacks, Nginx TLS/SPA/rate limiting, `/healthz` and `/readyz`, structured logs with `X-Request-Id`, `pg_dump` backup and restore scripts.
 
 ## Stack
@@ -122,6 +124,7 @@ npm run dev
 
 - Web: <http://127.0.0.1:5173> (Vite proxies `/api` to `http://127.0.0.1:8787`)
 - API: <http://127.0.0.1:8787>, health at `/healthz` and `/readyz`
+- API docs: <http://127.0.0.1:8787/api/v1/docs> (Scalar); spec at <http://127.0.0.1:8787/api/v1/openapi.json>. Open by default outside production; production requires `ENABLE_API_DOCS=1`.
 - Default admin: `admin@example.com` / `change-me-before-use` (from `.env.example`, local only — change it before demoing)
 
 API only: `npm run dev -w @portal/api`; web only: `npm run dev -w @portal/web`.
@@ -181,14 +184,14 @@ See [SECURITY.md](SECURITY.md) for the full model and reporting process. Highlig
 
 - Canonical prefix `/api/v1`; the legacy `/api` alias reuses the same router and only adds `Deprecation: true` and `Link: <...>; rel="successor-version"`.
 - Cookies + CSRF, error envelope, pagination, the full endpoint tables, audit actions and examples are in [docs/API.md](docs/API.md).
-- OpenAPI/Scalar docs are P1 (not implemented); `ENABLE_API_DOCS` is a reserved switch.
+- OpenAPI 3.1: `GET /api/v1/openapi.json` is always readable; the Scalar UI at `GET /api/v1/docs` is served outside production or when `ENABLE_API_DOCS=1`, otherwise 404. Media (`/media/{key}`) and dataset-snapshot endpoints are part of the spec.
 
 ## Project layout
 
 ```
 .
 ├── apps/
-│   ├── api/                 Express 5 API, seed CLI, integration tests
+│   ├── api/                 Express 5 API, seed CLI, media/OpenAPI modules, SQLite importer, integration tests
 │   │   └── Dockerfile       Debian slim + non-root; Argon2 prebuilt dependency
 │   └── web/                 Vue 3 + Vite SPA
 │       ├── nginx/           in-container HTTP static + /api proxy
@@ -204,10 +207,10 @@ See [SECURITY.md](SECURITY.md) for the full model and reporting process. Highlig
 │   ├── env.example          production env template (placeholders)
 │   ├── nginx/               edge TLS/HSTS/SPA/rate-limit example
 │   └── systemd/             systemd unit
-├── scripts/                 backup.sh / restore.sh / healthcheck.sh
+├── scripts/                 backup.sh / restore.sh / healthcheck.sh / import-sqlite.sh
 ├── e2e/                     Playwright smoke
 ├── docs/                    architecture, decisions, API, deployment, demo, readiness
-├── compose.yml              dev stack (postgres 5433 / redis 6380)
+├── compose.yml              dev stack (postgres 5433 / redis 6380; optional MinIO `media` profile)
 └── package.json             npm workspaces scripts
 ```
 
@@ -225,18 +228,33 @@ npm run test:e2e      # Playwright smoke
 - End-to-end demo steps and the acceptance checklist are in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
 - Pre/post-release checklist: [docs/RELEASE_NOTES_v2.0.0.md](docs/RELEASE_NOTES_v2.0.0.md).
 
-## P1 scope and known limitations
+## P1 capabilities and known limitations
 
-Deferred from v2.0.0 (core acceptance is unaffected):
+The following P1 capabilities are implemented on the `next` branch and **not yet released** (`v2.0.0` is still the latest release):
 
-- OpenAPI spec and Scalar reference UI (F036)
-- CSV dataset snapshots and undo (F064)
-- Built-in SMTP transport (only `webhook` and dev-only `console` today)
-- MinIO/S3 media storage (media is currently bundled static assets)
-- SQLite → PostgreSQL importer (F100 — required before production if you have real v1 data)
-- Full Playwright matrix and coverage gates (CI currently runs a smoke suite)
+- **OpenAPI + Scalar (F036)**: `/api/v1/openapi.json` and `/api/v1/docs`, see [API docs](docs/API.md).
+- **CSV snapshots and restore (F064)**: automatic snapshot before import/reset; the admin "data snapshots" tab restores any snapshot. See [API docs](docs/API.md) and [deployment](docs/DEPLOYMENT.md).
+- **SMTP (F049 extension)**: `MAIL_TRANSPORT=smtp` + `SMTP_URL`, see [deployment](docs/DEPLOYMENT.md).
+- **Local/S3 media (F094)**: `STORAGE_DRIVER` + `S3_*`; MinIO is available through the dev `media` profile, see [local development](docs/DEVELOPMENT.md).
+- **SQLite → PostgreSQL importer (F100)**: `npm run import:sqlite`; start with `--dry-run`, see [local development](docs/DEVELOPMENT.md).
 
-Out of scope as well: SSO/OIDC/SAML, SCIM, multi-tenancy, resource-level permissions, audit retention/archival/WORM, metrics/tracing APM, enforced admin MFA, WAL/PITR, CSP nonces.
+New environment variables (full defaults and production requirements in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ENABLE_API_DOCS` | `0` | Opens `/api/v1/docs` in production; already open outside production |
+| `MAIL_TRANSPORT` | `console` (dev) | `webhook` / `smtp` / `console`; `console` rejected in production |
+| `SMTP_URL` | empty | Required for `MAIL_TRANSPORT=smtp`; `smtp://` or `smtps://` |
+| `STORAGE_DRIVER` | `local` | `local` or `s3` |
+| `MEDIA_DIR` | `./data/media` | Local media directory |
+| `MEDIA_MAX_BYTES` | `52428800` | Per-file upload cap (~50 MB) |
+| `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | empty | Required for `STORAGE_DRIVER=s3`; credentials stay server-side |
+| `S3_ENDPOINT` | empty | Required for MinIO (e.g. `http://127.0.0.1:9000`); optional for AWS |
+| `S3_REGION` | `us-east-1` | S3 region |
+| `S3_FORCE_PATH_STYLE` | `1` | MinIO needs path-style addressing |
+| `S3_PUBLIC_URL` | empty | Optional public media domain; defaults to presigned URLs |
+
+Still deferred: full Playwright matrix and coverage gates (CI runs a smoke suite). Also out of scope: SSO/OIDC/SAML, SCIM, multi-tenancy, resource-level permissions, audit retention/archival/WORM, metrics/tracing APM, enforced admin MFA, WAL/PITR, CSP nonces.
 
 Risks and the definition of done: [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 

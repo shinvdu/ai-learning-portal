@@ -40,6 +40,8 @@ import { adminUsersRouter } from './modules/users/routes.js';
 import { recordsRouter } from './modules/records/routes.js';
 import { datasetRouter } from './modules/dataset/routes.js';
 import { auditRouter } from './modules/audit/routes.js';
+import { createOpenApiRouter } from './modules/openapi/routes.js';
+import { mediaRouter } from './modules/media/routes.js';
 
 export const APP_NAME = 'ai-learning-portal-api';
 
@@ -92,12 +94,20 @@ export function createApp(deps: AppDeps): Express {
   // Auth (includes /auth/csrf, login, register, MFA, ...).
   v1.use('/auth', authRouter);
 
+  // OpenAPI spec (GET /openapi.json) + Scalar docs (GET /docs); both prefixes
+  // share this router, so /api/openapi.json and /api/docs work through the alias.
+  v1.use(createOpenApiRouter(env));
+
   // Admin gate for every /admin/* path (401/403 exact v1 messages).
   v1.use('/admin', requireAdmin);
   v1.use('/admin/users', adminUsersRouter);
   v1.use('/admin/courses/:courseId/chapters', adminChaptersRouter);
   v1.use('/admin/courses', adminCoursesRouter);
   v1.use('/admin/audit', auditRouter);
+
+  // Media (F094): admin presign/upload (gated by /admin above) + public serve.
+  v1.use(mediaRouter);
+
   v1.use('/admin', datasetRouter);
 
   // Public catalog, chapters, knowledge, dashboard/insights, records/export.

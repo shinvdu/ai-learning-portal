@@ -11,6 +11,7 @@ import AuditTable from '@/components/admin/AuditTable.vue';
 import ChangePasswordDialog from '@/components/admin/ChangePasswordDialog.vue';
 import CourseTable from '@/components/admin/CourseTable.vue';
 import CreateUserDialog from '@/components/admin/CreateUserDialog.vue';
+import DatasetSnapshots from '@/components/admin/DatasetSnapshots.vue';
 import UserTable from '@/components/admin/UserTable.vue';
 import { apiErrorList, conflictRecordCount } from '@/components/admin/apiErrors';
 import { deleteAdminCourse } from '@/components/admin/adminCourseApi';
@@ -21,6 +22,7 @@ import { useToastStore } from '@/stores/toast';
 const tabs: { id: string; label: string }[] = [
   { id: 'users', label: '用户管理' },
   { id: 'courses', label: '课程管理' },
+  { id: 'snapshots', label: '数据快照' },
   { id: 'audit', label: '审计日志' },
 ];
 
@@ -250,6 +252,8 @@ function finishDelete(course: AdminCourse, deletedRecords: number): void {
     />
 
     <CourseTable v-else-if="activeTab === 'courses'" :courses="courses" @remove="removeCourse" />
+
+    <DatasetSnapshots v-else-if="activeTab === 'snapshots'" @restored="loadAudit" />
 
     <AuditTable v-else :rows="audit" />
 

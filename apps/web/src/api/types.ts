@@ -393,10 +393,34 @@ export type ImportResult = {
   skipped: number;
   total: number;
   errors: string[];
+  /** Snapshot of the pre-import dataset (F064). */
+  snapshotId?: number | null;
+  snapshotRowCount?: number | null;
+  importId?: number | null;
 };
 
 export type ImportResponse = ImportResult & { dataset: DatasetMeta };
 export type ResetResponse = ImportResponse;
+
+/* ------------------------------- snapshots -------------------------------- */
+
+export type DatasetSnapshot = {
+  id: number;
+  created_at: string;
+  reason: string;
+  row_count: number;
+  actor_email: string | null;
+};
+
+export type DatasetSnapshotsResponse = { snapshots: DatasetSnapshot[] };
+
+export type DatasetRestoreResponse = {
+  ok: true;
+  restored: number;
+  snapshot: DatasetSnapshot;
+  preRestoreSnapshot?: DatasetSnapshot;
+  dataset: DatasetMeta;
+};
 
 /* ---------------------------------- admin ----------------------------------- */
 

@@ -13,6 +13,7 @@ backups/
 .idea/
 
 # v2 build and tooling artifacts
+data/media/
 dist/
 .vite/
 *.tsbuildinfo
