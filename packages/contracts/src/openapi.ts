@@ -93,7 +93,7 @@ import {
 } from './users.js';
 
 /** Keep in sync with the published workspace version. */
-export const OPENAPI_INFO_VERSION = '2.1.0';
+export const OPENAPI_INFO_VERSION = '2.2.0';
 
 /**
  * Stable tag names. Tags are part of the published contract: renaming one is a
@@ -164,6 +164,96 @@ export const MediaUploadResponseSchema = z.object({
   url: z.string(),
   driver: z.literal('local'),
   path: z.string(),
+});
+
+/* ------------------------ Resumable uploads / library ---------------------- */
+
+export const MediaUploadStatusSchema = z.enum(['uploading', 'completed', 'aborted', 'expired']);
+
+export const MediaUploadCreateBodySchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.string().trim().min(1).max(200),
+  totalSize: z.number().int().positive(),
+});
+
+export const MediaUploadSessionSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  filename: z.string(),
+  contentType: z.string(),
+  totalSize: z.number().int().nonnegative(),
+  chunkSize: z.number().int().positive(),
+  totalChunks: z.number().int().positive(),
+  uploadedChunks: z.array(z.number().int().nonnegative()),
+  status: MediaUploadStatusSchema,
+  expiresAt: z.string(),
+});
+
+export const MediaUploadChunkResponseSchema = z.object({
+  index: z.number().int().nonnegative(),
+  received: z.number().int().nonnegative(),
+  totalChunks: z.number().int().positive(),
+});
+
+export const MediaUploadCompleteResponseSchema = z.object({
+  key: z.string(),
+  path: z.string(),
+  driver: MediaDriverSchema,
+  size: z.number().int().nonnegative(),
+});
+
+export const MediaUploadAbortResponseSchema = z.object({
+  ok: z.literal(true),
+  status: z.literal('aborted'),
+});
+
+export const MediaReferenceSchema = z.object({
+  type: z.enum(['course', 'chapter']),
+  id: z.string(),
+  field: z.enum(['src', 'poster']),
+});
+
+export const MediaLibraryItemSchema = z.object({
+  key: z.string(),
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  lastModified: z.string(),
+  contentType: z.string(),
+  references: z.array(MediaReferenceSchema),
+});
+
+export const MediaLibraryResponseSchema = z.object({
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  items: z.array(MediaLibraryItemSchema),
+});
+
+export const MediaDeleteResponseSchema = z.object({
+  ok: z.literal(true),
+  key: z.string(),
+  references: z.array(MediaReferenceSchema),
+});
+
+export const MediaCleanupBodySchema = z.object({
+  dryRun: z.boolean().optional(),
+  graceHours: z.number().int().nonnegative().max(24 * 365).optional(),
+});
+
+export const MediaCleanupItemSchema = z.object({
+  key: z.string(),
+  size: z.number().int().nonnegative(),
+  lastModified: z.string(),
+  reason: z.enum(['orphan', 'expired-upload']),
+});
+
+export const MediaCleanupResponseSchema = z.object({
+  deleted: z.number().int().nonnegative(),
+  skippedReferenced: z.number().int().nonnegative(),
+  skippedYoung: z.number().int().nonnegative(),
+  errors: z.array(z.object({ key: z.string(), error: z.string() })),
+  purgedUploads: z.number().int().nonnegative(),
+  items: z.array(MediaCleanupItemSchema),
 });
 
 export type OpenApiDocument = {
@@ -434,6 +524,17 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
         MediaPresignBody: MediaPresignBodySchema,
         MediaPresignResponse: MediaPresignResponseSchema,
         MediaUploadResponse: MediaUploadResponseSchema,
+        MediaUploadCreateBody: MediaUploadCreateBodySchema,
+        MediaUploadSession: MediaUploadSessionSchema,
+        MediaUploadChunkResponse: MediaUploadChunkResponseSchema,
+        MediaUploadCompleteResponse: MediaUploadCompleteResponseSchema,
+        MediaUploadAbortResponse: MediaUploadAbortResponseSchema,
+        MediaReference: MediaReferenceSchema,
+        MediaLibraryItem: MediaLibraryItemSchema,
+        MediaLibraryResponse: MediaLibraryResponseSchema,
+        MediaDeleteResponse: MediaDeleteResponseSchema,
+        MediaCleanupBody: MediaCleanupBodySchema,
+        MediaCleanupResponse: MediaCleanupResponseSchema,
       },
     },
     paths: {
@@ -1234,6 +1335,143 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
           responses: {
             '201': jsonOk('对象键与公开 URL', 'MediaUploadResponse'),
             ...errors('400', '401', '403', '413'),
+          },
+        },
+      },
+      [`${P}/admin/media/uploads`]: {
+        post: {
+          tags: ['Media'],
+          summary: '创建分片上传会话',
+          description:
+            '为可续传上传创建会话，返回 `id`、目标 `key`、`chunkSize`、`totalChunks` 与 `expiresAt`。`totalSize` 受 `MEDIA_MAX_BYTES`（默认 2 GiB）限制；分片大小默认 `MEDIA_CHUNK_SIZE`（8 MiB），最后一片可小于该值。会话在 `MEDIA_UPLOAD_TTL_HOURS` 后过期并清理暂存分片。',
+          operationId: 'createMediaUploadSession',
+          security: SESSION_CSRF,
+          requestBody: { required: true, ...jsonBody(REF('MediaUploadCreateBody')) },
+          responses: {
+            '201': jsonOk('上传会话（含目标 key 与分片计划）', 'MediaUploadSession'),
+            ...errors('400', '401', '403', '413'),
+          },
+        },
+      },
+      [`${P}/admin/media/uploads/{id}`]: {
+        get: {
+          tags: ['Media'],
+          summary: '查询上传会话（断点续传）',
+          description: '仅会话创建者可读；返回 `uploadedChunks` 以便客户端跳过已上传分片。过期会话返回 `status:"expired"` 且暂存分片已被清理。',
+          operationId: 'getMediaUploadSession',
+          security: SESSION,
+          parameters: [pathParam('id', '上传会话 id')],
+          responses: {
+            '200': jsonOk('会话状态与已上传分片', 'MediaUploadSession'),
+            ...errors('401', '403', '404'),
+          },
+        },
+        delete: {
+          tags: ['Media'],
+          summary: '中止上传会话',
+          description: '仅会话创建者可调用；标记 `aborted` 并删除暂存分片。',
+          operationId: 'abortMediaUploadSession',
+          security: SESSION_CSRF,
+          parameters: [pathParam('id', '上传会话 id')],
+          responses: {
+            '200': jsonOk('会话已中止', 'MediaUploadAbortResponse'),
+            ...errors('401', '403', '404', '409'),
+          },
+        },
+      },
+      [`${P}/admin/media/uploads/{id}/chunks/{index}`]: {
+        put: {
+          tags: ['Media'],
+          summary: '上传单个分片',
+          description:
+            '原始字节流，大小不得超过会话 `chunkSize`（服务端上限 `MEDIA_CHUNK_SIZE`）。分片幂等落盘到 `MEDIA_DIR/.uploads/<id>/<index>.part` 并记录到 `uploadedChunks`；重复上传同一序号覆盖该分片。',
+          operationId: 'uploadMediaChunk',
+          security: SESSION_CSRF,
+          parameters: [
+            pathParam('id', '上传会话 id'),
+            intPathParam('index', '分片序号（从 0 开始）'),
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/octet-stream': { schema: BINARY } },
+          },
+          responses: {
+            '200': jsonOk('分片已接收', 'MediaUploadChunkResponse'),
+            ...errors('400', '401', '403', '404', '409', '413'),
+          },
+        },
+      },
+      [`${P}/admin/media/uploads/{id}/complete`]: {
+        post: {
+          tags: ['Media'],
+          summary: '完成分片上传并组装对象',
+          description:
+            '要求所有分片均已上传且大小合计等于 `totalSize`。local 驱动原子写入 `MEDIA_DIR/<key>` 与 `.meta`；s3 驱动在本地组装临时文件后 `PutObject` 上传并删除临时文件。成功后清理分片并把会话置为 `completed`；失败保留分片以便重试。`path` 为可持久化的站内地址。',
+          operationId: 'completeMediaUpload',
+          security: SESSION_CSRF,
+          parameters: [pathParam('id', '上传会话 id')],
+          responses: {
+            '200': jsonOk('对象已组装并落盘', 'MediaUploadCompleteResponse'),
+            ...errors('400', '401', '403', '404', '409', '413', '500'),
+          },
+        },
+      },
+      [`${P}/admin/media`]: {
+        get: {
+          tags: ['Media'],
+          summary: '媒体库列表',
+          description:
+            '列出存储驱动中的媒体对象，并扫描课程/章节视频 JSON，返回 `references`（`/api/v1/media/<key>` 引用）。按 `lastModified` 倒序分页。',
+          operationId: 'listMediaLibrary',
+          security: SESSION,
+          parameters: [
+            queryParam('limit', '每页数量（1–200，默认 50）', {
+              type: 'integer',
+              minimum: 1,
+              maximum: 200,
+            }),
+            queryParam('offset', '跳过条数（≥0）', { type: 'integer', minimum: 0 }),
+          ],
+          responses: {
+            '200': jsonOk('媒体库分页结果（含引用）', 'MediaLibraryResponse'),
+            ...errors('401', '403', '500'),
+          },
+        },
+      },
+      [`${P}/admin/media/{key}`]: {
+        delete: {
+          tags: ['Media'],
+          summary: '删除媒体对象',
+          description:
+            '默认拒绝删除仍被课程/章节视频引用的对象（409 + `references`）；`force=1` 强制删除。对象不存在返回 404。',
+          operationId: 'deleteMedia',
+          security: SESSION_CSRF,
+          parameters: [
+            pathParam('key', '媒体对象键'),
+            queryParam('force', '`1`/`true` 时即使仍被引用也删除'),
+          ],
+          responses: {
+            '200': jsonOk('对象已删除', 'MediaDeleteResponse'),
+            '409': {
+              description: '对象仍被课程/章节引用',
+              content: { 'application/json': { schema: REF('ApiError') } },
+            },
+            ...errors('400', '401', '403', '404'),
+          },
+        },
+      },
+      [`${P}/admin/media/cleanup`]: {
+        post: {
+          tags: ['Media'],
+          summary: '清理孤儿媒体与过期上传',
+          description:
+            '删除早于宽限期（默认 `MEDIA_ORPHAN_GRACE_HOURS`）且未被课程/章节引用的对象，并清理过期上传会话与暂存分片；`dryRun:true` 仅报告。进行中的上传分片与被引用对象永不删除。',
+          operationId: 'cleanupMedia',
+          security: SESSION_CSRF,
+          requestBody: { required: false, ...jsonBody(REF('MediaCleanupBody')) },
+          responses: {
+            '200': jsonOk('清理结果（dryRun 时为候选列表）', 'MediaCleanupResponse'),
+            ...errors('400', '401', '403', '500'),
           },
         },
       },

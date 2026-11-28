@@ -42,9 +42,20 @@ import type {
   KnowledgeResponse,
   LoginInput,
   LoginResponse,
+  MediaCleanupInput,
+  MediaCleanupResult,
+  MediaDeleteResponse,
+  MediaLibraryQuery,
+  MediaLibraryResponse,
   MediaPresignInput,
   MediaPresignResponse,
+  MediaUploadAbortResponse,
+  MediaUploadChunkResponse,
+  MediaUploadCompleteResponse,
+  MediaUploadCreateInput,
+  MediaUploadCreateResponse,
   MediaUploadResponse,
+  MediaUploadSession,
   MfaBody,
   MfaEnableResponse,
   MfaResponse,
@@ -341,6 +352,113 @@ export const mediaApi = {
   /** Permanent site-local path stored in course/chapter `video.path`. */
   mediaPath(key: string): string {
     return `${API_BASE}/media/${key}`;
+  },
+};
+
+/* --------------------------- resumable media uploads ------------------------ */
+
+export type ChunkUploadOptions = {
+  onProgress?: (progress: UploadProgress) => void;
+  signal?: AbortSignal;
+};
+
+/**
+ * Chunked/resumable upload session API (F097). Chunks are raw binary PUTs to
+ * the same-origin admin endpoint so the session cookie and CSRF double-submit
+ * token travel with every piece; the API stages them and only persists the
+ * assembled object on `complete`.
+ */
+export const mediaUploadApi = {
+  createUpload(
+    input: MediaUploadCreateInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<MediaUploadCreateResponse> {
+    return apiRequest('/admin/media/uploads', {
+      method: 'POST',
+      body: input,
+      signal: options.signal,
+    });
+  },
+
+  /** Session state, including `uploadedChunks` to resume from. */
+  getUpload(id: string, options: { signal?: AbortSignal } = {}): Promise<MediaUploadSession> {
+    return apiRequest(`/admin/media/uploads/${enc(id)}`, { signal: options.signal });
+  },
+
+  /**
+   * PUT one chunk. Uses XHR for upload progress; 403 triggers one CSRF
+   * refresh + replay (the session itself is validated server-side).
+   */
+  async putChunk(
+    id: string,
+    index: number,
+    chunk: Blob,
+    options: ChunkUploadOptions = {},
+  ): Promise<MediaUploadChunkResponse> {
+    const path = `${API_BASE}/admin/media/uploads/${enc(id)}/chunks/${index}`;
+    const send = (token: string): Promise<MediaUploadChunkResponse> => {
+      const headers: Record<string, string> = {
+        'Content-Type': chunk.type || 'application/octet-stream',
+      };
+      if (token) headers[CSRF_HEADER] = token;
+      return uploadBinary<MediaUploadChunkResponse>(path, chunk, {
+        method: 'PUT',
+        headers,
+        credentials: 'same-origin',
+        onProgress: options.onProgress,
+        signal: options.signal,
+      });
+    };
+
+    const token = readCsrfToken() || (await refreshCsrf());
+    try {
+      return await send(token);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403 && !options.signal?.aborted) {
+        const fresh = await refreshCsrf();
+        if (fresh && fresh !== token) return send(fresh);
+      }
+      throw error;
+    }
+  },
+
+  /** Assemble staged chunks and persist the object. */
+  completeUpload(id: string): Promise<MediaUploadCompleteResponse> {
+    return apiRequest(`/admin/media/uploads/${enc(id)}/complete`, { method: 'POST' });
+  },
+
+  /** Cancel an in-progress session and drop its staged chunks. */
+  abortUpload(id: string): Promise<MediaUploadAbortResponse> {
+    return apiRequest(`/admin/media/uploads/${enc(id)}`, { method: 'DELETE' });
+  },
+};
+
+/* ------------------------------- media library ------------------------------ */
+
+export const mediaLibraryApi = {
+  /** Stored objects with course/chapter references, newest first. */
+  list(query: MediaLibraryQuery = {}): Promise<MediaLibraryResponse> {
+    return apiRequest(
+      withQuery('/admin/media', { limit: query.limit, offset: query.offset }),
+    );
+  },
+
+  /**
+   * Delete one object. Referenced objects return 409 with `references` unless
+   * `force` is true; forcing breaks the course/chapter video that points here.
+   */
+  remove(key: string, force = false): Promise<MediaDeleteResponse> {
+    return apiRequest(withQuery(`/admin/media/${enc(key)}`, { force: force ? 1 : undefined }), {
+      method: 'DELETE',
+    });
+  },
+
+  /** Orphan cleanup. `dryRun` reports what would be deleted without removing. */
+  cleanup(input: MediaCleanupInput = {}): Promise<MediaCleanupResult> {
+    return apiRequest('/admin/media/cleanup', {
+      method: 'POST',
+      body: { dryRun: input.dryRun === true, graceHours: input.graceHours },
+    });
   },
 };
 

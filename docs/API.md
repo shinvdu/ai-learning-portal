@@ -1,4 +1,4 @@
-# API 参考（v2.1.0）
+# API 参考（v2.2.0）
 
 本文描述 AI Learning Portal v2 的 HTTP API。规范前缀为 **`/api/v1`**；旧前缀 **`/api`** 复用同一套 router，并在响应中追加：
 
@@ -11,7 +11,7 @@ Link: </api/v1/...>; rel="successor-version"
 
 - 健康检查位于根路径 `/healthz`、`/readyz`，不在 `/api` 下。
 - 未知 API 路径统一返回 `404 {"error":"接口不存在"}`。
-- 请求体上限 **2 MB**，超出返回 `413 {"error":"请求体超过 2MB 限制"}`。
+- JSON 请求体上限 **2 MB**，超出返回 `413 {"error":"请求体超过 2MB 限制"}`。媒体原始上传为二进制流，另有独立上限：分片 ≤ `MEDIA_CHUNK_SIZE`、总大小 ≤ `MEDIA_MAX_BYTES`（旧单请求端点 ≤ `min(MEDIA_MAX_BYTES, 50 MiB)`），见 §8 媒体。
 
 ---
 
@@ -52,8 +52,8 @@ Link: </api/v1/...>; rel="successor-version"
 | 401 | 未登录、邮箱或密码错误、验证码错误 |
 | 403 | 非管理员、CSRF/同源失败、未验证邮箱、生产禁用演示重置 |
 | 404 | 未知 API、课程/章节/用户/记录不存在 |
-| 409 | 唯一约束冲突、MFA 已启用、课程仍有记录（未 `force`） |
-| 413 | JSON 请求体超过 2 MB，或原始媒体上传超过 `MEDIA_MAX_BYTES` |
+| 409 | 唯一约束冲突、MFA 已启用、课程仍有记录（未 `force`）、删除仍被引用的媒体、上传会话状态/过期冲突 |
+| 413 | JSON 请求体超过 2 MB；媒体分片超过 `chunkSize`（`MEDIA_CHUNK_SIZE`）；上传总大小超过 `MEDIA_MAX_BYTES`；旧单请求上传超过 `min(MEDIA_MAX_BYTES, 50 MiB)` |
 | 423 | 账号临时锁定（15 分钟） |
 | 429 | 触发限流 |
 | 502 | 邮件网关失败（`code: "MAIL_FAILED"`） |
@@ -247,12 +247,34 @@ PATCH /api/v1/admin/courses/C6/chapters/1
 
 ### 媒体
 
-`STORAGE_DRIVER=local`（默认）时，文件落在 `MEDIA_DIR`，通过 API 提供 Range 播放；`STORAGE_DRIVER=s3` 时对接 S3/MinIO，凭据只留在服务端。
+`STORAGE_DRIVER=local`（默认）时，文件落在 `MEDIA_DIR`，通过 API 提供 Range 播放；`STORAGE_DRIVER=s3` 时对接 S3/MinIO，凭据只留在服务端。v2.2.0 起上传默认走**分片/断点续传**（F098），旧单请求端点保留兼容。
+
+**分片上传（F098）**
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/admin/media/uploads` | 请求体 `{filename, contentType, totalSize}` → `201 {id, key, chunkSize, totalChunks, uploadedChunks:[], expiresAt, status:"uploading"}`。`totalSize` 超过 `MEDIA_MAX_BYTES`（默认 2 GiB）返回 `413`；`chunkSize` 默认 8 MiB，`totalChunks=max(1,ceil(totalSize/chunkSize))` |
+| GET | `/admin/media/uploads/:id` | 会话状态（仅创建者）：`{id, key, filename, contentType, totalSize, chunkSize, totalChunks, uploadedChunks, status, expiresAt}`。用于断点续传；他人/不存在 `404` |
+| PUT | `/admin/media/uploads/:id/chunks/:index` | 原始字节流；`index` 从 0 开始，分片 ≤ `chunkSize`，空片/超限 `400`/`413`；会话须 `uploading` 且未过期，否则 `409`。幂等，重复上传覆盖同序号；返回 `200 {index, received, totalChunks}` |
+| POST | `/admin/media/uploads/:id/complete` | 校验全部分片与总大小后组装并落盘；S3 由服务端 `PutObject`。成功 `200 {key, path, driver, size}`；已完成为幂等；失败保留分片可重试。缺片/大小不符 `400` |
+| DELETE | `/admin/media/uploads/:id` | 中止会话并删除暂存分片，`200 {ok:true, status:"aborted"}`；已 `completed` 返回 `409` |
+
+会话在 `MEDIA_UPLOAD_TTL_HOURS`（默认 24h）后过期：暂存分片被删除、状态置 `expired`；终态行过期后清理。分片落在 `MEDIA_DIR/.uploads/<id>/<index>.part`（S3 模式同样暂存于 API 主机）。
+
+**媒体库（F097）**
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/media?limit=&offset=` | 对象列表（`lastModified` 倒序，`limit` 1–200 默认 50），返回 `{total, limit, offset, items:[{key, path, size, lastModified, contentType, references:[{type,id,field}]}]}`；`references` 由课程/章节 `video.src` / `video.poster` 中的 `/api/v1/media/<key>` 扫描得到 |
+| DELETE | `/admin/media/:key?force=1` | 默认拒绝删除仍被引用的对象：`409 {error, references}`；`force=1` 强制删除。成功 `200 {ok:true, key, references}`；不存在/key 非法 `404` |
+| POST | `/admin/media/cleanup` | 请求体可选 `{dryRun?, graceHours?}`（`graceHours` 0–8760，默认 `MEDIA_ORPHAN_GRACE_HOURS`）。删除未被引用且超过宽限期的对象，并回收过期上传会话；`dryRun:true` 只报告。返回 `{deleted, skippedReferenced, skippedYoung, errors[], purgedUploads, items[]}`。被引用对象与进行中的上传分片永不删除 |
+
+**兼容的旧单请求端点**
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/admin/media/presign` | 请求体 `{filename, contentType}` → `{key, uploadUrl, publicUrl, expiresIn, driver, path}`（`expiresIn` 为 900 秒）。S3 返回预签名 PUT；本地返回 `/admin/media/upload?key=...` 上传地址。`driver` 为 `local`/`s3` |
-| POST | `/admin/media/upload?key=&filename=` | 仅本地驱动；原始字节流（`application/octet-stream` 或视频/MIME），受 `MEDIA_MAX_BYTES` 限制，超限 `413`；返回 `201 {key, url, driver:"local", path}`。S3 模式返回 `400`，应改用 presign |
+| POST | `/admin/media/upload?key=&filename=` | 仅本地驱动；原始字节流（`application/octet-stream` 或视频/MIME），上限固定为 `min(MEDIA_MAX_BYTES, 50 MiB)`，超限 `413`；返回 `201 {key, url, driver:"local", path}`。S3 模式返回 `400`，应改用分片上传 |
 
 **持久化 `path`，不要保存 `publicUrl`/`url`**：`path` 是不过期、非绝对的站内地址 `/api/v1/media/<key>`；`publicUrl` 在 `S3_PUBLIC_URL` 配置时可能是外部 CDN 地址，未配置时是短时预签名 URL。管理后台的上传器（F095）已按此规则回填课程/章节的 `src`/`poster`。
 
@@ -262,7 +284,32 @@ PATCH /api/v1/admin/courses/C6/chapters/1
   "expiresIn": 900, "driver": "s3", "path": "/api/v1/media/9f....mp4" }
 ```
 
-把课程/章节视频指向媒体对象：在上传得到 `key` 后，用管理后台表单（课程或章节）把视频模式设为 `custom`，`src` 填 `/api/v1/media/<key>`（封面同理填 `/api/v1/media/<posterKey>`；`src`/`poster` 必须以 `/` 开头，不接受外站或协议相对地址）。管理后台可直接选择文件上传，local 驱动走原始直传，S3 驱动由浏览器按预签名 URL 直传（需桶/MinIO CORS）。
+把课程/章节视频指向媒体对象：在上传得到 `key` 后，用管理后台表单（课程或章节）把视频模式设为 `custom`，`src` 填 `/api/v1/media/<key>`（封面同理填 `/api/v1/media/<posterKey>`；`src`/`poster` 必须以 `/` 开头，不接受外站或协议相对地址）。管理后台默认走分片上传（S3 也由服务端组装后 `PutObject`）；旧的 local 原始直传 / S3 预签名直传仅作兼容，若使用预签名直传则需桶/MinIO CORS。
+
+```bash
+# 分片上传（3 片，示例）：创建 → PUT 各片 → complete
+curl -b jar.txt -H 'Content-Type: application/json' -H "X-CSRF-Token: $T" \
+  -d '{"filename":"sample.mp4","contentType":"video/mp4","totalSize":25000000}' \
+  'http://127.0.0.1:8787/api/v1/admin/media/uploads'
+# → 201 {"id":"<sid>","key":"<hex>.mp4","chunkSize":8388608,"totalChunks":3,"uploadedChunks":[],"expiresAt":"...","status":"uploading"}
+split -b 8388608 -d sample.mp4 part-
+for i in 0 1 2; do
+  curl -b jar.txt -H "X-CSRF-Token: $T" -H 'Content-Type: application/octet-stream' \
+    --data-binary @"part-0$i" \
+    "http://127.0.0.1:8787/api/v1/admin/media/uploads/<sid>/chunks/$i"
+done
+curl -b jar.txt -H "X-CSRF-Token: $T" -X POST \
+  'http://127.0.0.1:8787/api/v1/admin/media/uploads/<sid>/complete'
+# → 200 {"key":"<hex>.mp4","path":"/api/v1/media/<hex>.mp4","driver":"local","size":25000000}
+```
+
+```bash
+# 媒体库：列表、拒绝删除被引用对象、清理预演
+curl -b jar.txt 'http://127.0.0.1:8787/api/v1/admin/media?limit=20'
+curl -b jar.txt -X DELETE 'http://127.0.0.1:8787/api/v1/admin/media/<hex>.mp4'      # 被引用 → 409
+curl -b jar.txt -H 'Content-Type: application/json' -H "X-CSRF-Token: $T" \
+  -d '{"dryRun":true,"graceHours":24}' 'http://127.0.0.1:8787/api/v1/admin/media/cleanup'
+```
 
 ```bash
 # 本地驱动：上传 mp4（管理员会话，带 CSRF/Origin，同浏览器行为）
@@ -290,6 +337,7 @@ curl -r 0-99 -i 'http://127.0.0.1:8787/api/v1/media/<hex>.mp4'   # → 206 Parti
 | 用户 | `admin.user_created`、`admin.user_updated` |
 | 课程/章节 | `admin.course_created`、`admin.course_updated`、`admin.course_deleted`、`admin.chapter_created`、`admin.chapter_updated`、`admin.chapter_deleted` |
 | 数据 | `data.record_created`、`data.record_updated`、`data.record_deleted`、`data.csv_imported`、`data.csv_exported`、`data.csv_reset`、`data.reset`、`data.snapshot_created`、`data.snapshot_restored` |
+| 媒体 | `media.upload_started`、`media.upload_completed`、`media.upload_aborted`、`media.deleted`、`media.cleanup` |
 
 ## 10. 健康检查
 
@@ -339,13 +387,13 @@ curl -b jar.txt -c jar.txt \
 | GET | `/openapi.json` | OpenAPI 3.1 规范，`application/json` + `Cache-Control: no-store`，**始终可读** |
 | GET | `/docs` | Scalar 交互式文档；`APP_ENV !== 'production'` 或 `ENABLE_API_DOCS=1` 时返回 HTML，否则 `404 {"error":"接口不存在"}` |
 
-- 规范由 `packages/contracts` 用与运行时校验相同的 zod schema 生成，覆盖 41 条路径（认证、公开目录、分析、管理、媒体、数据快照、健康检查），并声明 cookie 会话、`X-CSRF-Token` 与错误 envelope。
+- 规范由 `packages/contracts` 用与运行时校验相同的 zod schema 生成，覆盖 48 条路径（认证、公开目录、分析、管理、媒体含分片上传与媒体库、数据快照、健康检查），并声明 cookie 会话、`X-CSRF-Token` 与错误 envelope。
 - `GET /api/v1/openapi.json` 始终可读（`no-store`）；`GET /api/v1/docs` 是 Scalar UI，网络侧从 jsDelivr 加载前端资源，该页单独放宽 CSP，其余页面保持严格策略。
 - 生产默认关闭 `/docs`；如需开放，设置 `ENABLE_API_DOCS=1`。开发/测试环境默认开放，无需设置。
 
 ```bash
 curl -s http://127.0.0.1:8787/api/v1/openapi.json | jq '.openapi, (.paths | keys | length)'
-# → "3.1.0" \n 41
+# → "3.1.0" \n 48
 ```
 
 导入 Scalar/Postman：直接以 `http://127.0.0.1:8787/api/v1/openapi.json` 作为规范地址即可。

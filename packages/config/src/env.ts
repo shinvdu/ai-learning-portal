@@ -20,7 +20,11 @@ export const DEFAULT_API_PORT = 8787;
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_MAIL_FROM = 'AI Learning Portal <no-reply@example.com>';
 export const DEFAULT_MEDIA_DIR = './data/media';
-export const DEFAULT_MEDIA_MAX_BYTES = 52428800;
+/** 2 GiB: the ceiling for chunked uploads (the legacy raw endpoint stays at 50 MiB). */
+export const DEFAULT_MEDIA_MAX_BYTES = 2147483648;
+export const DEFAULT_MEDIA_CHUNK_SIZE = 8388608;
+export const DEFAULT_MEDIA_UPLOAD_TTL_HOURS = 24;
+export const DEFAULT_MEDIA_ORPHAN_GRACE_HOURS = 24;
 export const DEFAULT_S3_REGION = 'us-east-1';
 export const DEFAULT_S3_FORCE_PATH_STYLE = true;
 export const DEV_DATABASE_URL = 'postgres://portal:portal@127.0.0.1:5433/ai_portal';
@@ -96,6 +100,9 @@ export const EnvSchema = z
     STORAGE_DRIVER: StorageDriverSchema.default('local'),
     MEDIA_DIR: trimmedString.min(1).default(DEFAULT_MEDIA_DIR),
     MEDIA_MAX_BYTES: numberEnv(DEFAULT_MEDIA_MAX_BYTES),
+    MEDIA_CHUNK_SIZE: numberEnv(DEFAULT_MEDIA_CHUNK_SIZE),
+    MEDIA_UPLOAD_TTL_HOURS: numberEnv(DEFAULT_MEDIA_UPLOAD_TTL_HOURS),
+    MEDIA_ORPHAN_GRACE_HOURS: numberEnv(DEFAULT_MEDIA_ORPHAN_GRACE_HOURS),
     S3_ENDPOINT: optionalString,
     S3_REGION: trimmedString.min(1).default(DEFAULT_S3_REGION),
     S3_BUCKET: optionalString,

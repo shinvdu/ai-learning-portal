@@ -519,6 +519,119 @@ export type MediaUploaded = {
   driver: MediaDriver;
 };
 
+/* --------------------------- resumable uploads (F097) ---------------------- */
+
+export type MediaUploadStatus = 'uploading' | 'completed' | 'aborted' | 'expired';
+
+/** `POST /admin/media/uploads`. */
+export type MediaUploadCreateInput = {
+  filename: string;
+  contentType: string;
+  totalSize: number;
+};
+
+/**
+ * `POST /admin/media/uploads` response. The API returns the session identity
+ * and chunk plan; filename/contentType/totalSize are echoed by `GET` only.
+ */
+export type MediaUploadCreateResponse = {
+  id: string;
+  key: string;
+  chunkSize: number;
+  totalChunks: number;
+  uploadedChunks: number[];
+  expiresAt: string;
+  status: 'uploading';
+};
+
+/** `GET /admin/media/uploads/:id` — resumable session state. */
+export type MediaUploadSession = {
+  id: string;
+  key: string;
+  filename: string;
+  contentType: string;
+  totalSize: number;
+  chunkSize: number;
+  totalChunks: number;
+  uploadedChunks: number[];
+  status: MediaUploadStatus;
+  expiresAt: string;
+};
+
+/** `PUT /admin/media/uploads/:id/chunks/:index`. */
+export type MediaUploadChunkResponse = {
+  index: number;
+  received: number;
+  totalChunks: number;
+};
+
+/** `POST /admin/media/uploads/:id/complete`. */
+export type MediaUploadCompleteResponse = {
+  key: string;
+  path: string;
+  driver: MediaDriver;
+  size: number;
+};
+
+/** `DELETE /admin/media/uploads/:id`. */
+export type MediaUploadAbortResponse = { ok: true; status: 'aborted' };
+
+/* ----------------------------- media library ------------------------------ */
+
+/** A course/chapter field that still points at a media object. */
+export type MediaReference = {
+  type: 'course' | 'chapter';
+  id: string;
+  field: 'src' | 'poster';
+};
+
+/** `GET /admin/media` item. */
+export type MediaObject = {
+  key: string;
+  path: string;
+  size: number;
+  lastModified: string;
+  contentType: string;
+  references: MediaReference[];
+};
+
+export type MediaLibraryQuery = { limit?: number; offset?: number };
+
+export type MediaLibraryResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: MediaObject[];
+};
+
+/** `DELETE /admin/media/:key`; also the 409 payload's `references`. */
+export type MediaDeleteResponse = {
+  ok: true;
+  key: string;
+  references: MediaReference[];
+};
+
+export type MediaCleanupInput = { dryRun?: boolean; graceHours?: number };
+
+export type MediaCleanupItem = {
+  key: string;
+  size: number;
+  lastModified: string;
+  reason: 'orphan' | 'expired-upload';
+};
+
+export type MediaCleanupError = { key: string; error: string };
+
+/** `POST /admin/media/cleanup` (dry run populates `items` without deleting). */
+export type MediaCleanupResult = {
+  deleted: number;
+  skippedReferenced: number;
+  skippedYoung: number;
+  errors: MediaCleanupError[];
+  purgedUploads: number;
+  items: MediaCleanupItem[];
+};
+
 export type AdminUser = {
   id: number;
   email: string;

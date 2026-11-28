@@ -16,13 +16,16 @@ export const CSRF_COOKIE_NAME = 'aip_csrf';
 export const CSRF_HEADER = 'X-CSRF-Token';
 
 /**
- * Client-side mirror of the API `MEDIA_MAX_BYTES` default (50MB). The server
- * remains authoritative; this only avoids a doomed upload over slow links.
- * Override at build time with `VITE_MEDIA_MAX_BYTES` when the API is tuned.
+ * Client-side mirror of the API `MEDIA_MAX_BYTES` default (2 GiB). Chunked
+ * uploads stream through `MEDIA_CHUNK_SIZE` pieces, so the total file size is
+ * bounded by this value rather than the legacy 50 MiB single-request cap. The
+ * server remains authoritative; this only avoids a doomed upload over slow
+ * links. Override at build time with `VITE_MEDIA_MAX_BYTES` when the API is
+ * tuned.
  */
 export const MEDIA_MAX_BYTES = (() => {
   const raw = Number(import.meta.env?.VITE_MEDIA_MAX_BYTES);
-  return Number.isFinite(raw) && raw > 0 ? raw : 50 * 1024 * 1024;
+  return Number.isFinite(raw) && raw > 0 ? raw : 2 * 1024 * 1024 * 1024;
 })();
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);

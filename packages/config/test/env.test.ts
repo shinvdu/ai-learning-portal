@@ -33,7 +33,10 @@ describe('parseEnv (development)', () => {
     expect(env.SMTP_URL).toBeUndefined();
     expect(env.STORAGE_DRIVER).toBe('local');
     expect(env.MEDIA_DIR).toBe('./data/media');
-    expect(env.MEDIA_MAX_BYTES).toBe(52428800);
+    expect(env.MEDIA_MAX_BYTES).toBe(2147483648);
+    expect(env.MEDIA_CHUNK_SIZE).toBe(8388608);
+    expect(env.MEDIA_UPLOAD_TTL_HOURS).toBe(24);
+    expect(env.MEDIA_ORPHAN_GRACE_HOURS).toBe(24);
     expect(env.S3_ENDPOINT).toBeUndefined();
     expect(env.S3_REGION).toBe('us-east-1');
     expect(env.S3_BUCKET).toBeUndefined();
@@ -49,6 +52,9 @@ describe('parseEnv (development)', () => {
       STORAGE_DRIVER: 's3',
       MEDIA_DIR: '/srv/media',
       MEDIA_MAX_BYTES: '1024',
+      MEDIA_CHUNK_SIZE: '256',
+      MEDIA_UPLOAD_TTL_HOURS: '6',
+      MEDIA_ORPHAN_GRACE_HOURS: '48',
       S3_ENDPOINT: 'http://127.0.0.1:9000',
       S3_REGION: 'eu-west-1',
       S3_BUCKET: 'portal-media',
@@ -62,6 +68,9 @@ describe('parseEnv (development)', () => {
     expect(env.STORAGE_DRIVER).toBe('s3');
     expect(env.MEDIA_DIR).toBe('/srv/media');
     expect(env.MEDIA_MAX_BYTES).toBe(1024);
+    expect(env.MEDIA_CHUNK_SIZE).toBe(256);
+    expect(env.MEDIA_UPLOAD_TTL_HOURS).toBe(6);
+    expect(env.MEDIA_ORPHAN_GRACE_HOURS).toBe(48);
     expect(env.S3_ENDPOINT).toBe('http://127.0.0.1:9000');
     expect(env.S3_REGION).toBe('eu-west-1');
     expect(env.S3_BUCKET).toBe('portal-media');
@@ -71,8 +80,11 @@ describe('parseEnv (development)', () => {
 
   it('keeps the default media size for empty or invalid values', () => {
     expect(() => parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: '' })).not.toThrow();
-    expect(parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: '' }).MEDIA_MAX_BYTES).toBe(52428800);
+    expect(parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: '' }).MEDIA_MAX_BYTES).toBe(2147483648);
     expect(() => parseEnv({ APP_ENV: 'development', MEDIA_MAX_BYTES: 'not-a-number' })).toThrow();
+    expect(() => parseEnv({ APP_ENV: 'development', MEDIA_CHUNK_SIZE: '0' })).toThrow();
+    expect(() => parseEnv({ APP_ENV: 'development', MEDIA_UPLOAD_TTL_HOURS: '-1' })).toThrow();
+    expect(() => parseEnv({ APP_ENV: 'development', MEDIA_ORPHAN_GRACE_HOURS: 'x' })).toThrow();
   });
 });
 
@@ -170,7 +182,10 @@ describe('parseEnv (production)', () => {
 
     expect(env.STORAGE_DRIVER).toBe('local');
     expect(env.MEDIA_DIR).toBe('./data/media');
-    expect(env.MEDIA_MAX_BYTES).toBe(52428800);
+    expect(env.MEDIA_MAX_BYTES).toBe(2147483648);
+    expect(env.MEDIA_CHUNK_SIZE).toBe(8388608);
+    expect(env.MEDIA_UPLOAD_TTL_HOURS).toBe(24);
+    expect(env.MEDIA_ORPHAN_GRACE_HOURS).toBe(24);
     expect(env.S3_FORCE_PATH_STYLE).toBe(true);
   });
 });

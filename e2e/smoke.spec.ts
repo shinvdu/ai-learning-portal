@@ -138,7 +138,7 @@ test.describe('auth and navigation', () => {
     await expect(page.getByRole('heading', { level: 1 })).toContainText('用户与课程管理');
 
     const tabs = page.getByRole('tab');
-    await expect(tabs).toHaveCount(4);
+    await expect(tabs).toHaveCount(5);
 
     await expect(page.locator('#admin-users-title')).toBeVisible();
 
@@ -147,6 +147,10 @@ test.describe('auth and navigation', () => {
 
     await page.getByRole('tab', { name: '数据快照' }).click();
     await expect(page.locator('#dataset-snapshots-title')).toBeVisible();
+
+    await page.getByRole('tab', { name: '媒体库' }).click();
+    await expect(page.locator('#admin-media-title')).toBeVisible();
+    await expect(page.getByRole('button', { name: '预演' })).toBeVisible();
 
     await page.getByRole('tab', { name: '审计日志' }).click();
     await expect(page.locator('#admin-audit-title')).toBeVisible();

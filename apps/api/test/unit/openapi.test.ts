@@ -79,7 +79,7 @@ describe('OpenAPI document', () => {
     expect(document.openapi).toBe('3.1.0');
     const info = document.info as Json;
     expect(info.title).toBe('AI Learning Portal API');
-    expect(info.version).toBe('2.1.0');
+    expect(info.version).toBe('2.2.0');
     expect(typeof info.description).toBe('string');
     expect(document.servers).toEqual([
       { url: 'https://portal.example.com', description: '当前部署' },
@@ -99,6 +99,13 @@ describe('OpenAPI document', () => {
     expect(paths['/api/v1/admin/dataset/restore/{id}']).toBeTypeOf('object');
     expect(paths['/api/v1/admin/media/presign']).toBeTypeOf('object');
     expect(paths['/api/v1/admin/media/upload']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/uploads']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/uploads/{id}']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/uploads/{id}/chunks/{index}']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/uploads/{id}/complete']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/{key}']).toBeTypeOf('object');
+    expect(paths['/api/v1/admin/media/cleanup']).toBeTypeOf('object');
     expect(paths['/assets/{path}']).toBeTypeOf('object');
   });
 
@@ -134,6 +141,16 @@ describe('OpenAPI document', () => {
     const components = document.components as Json;
     const auditAction = (components.schemas as Json).AuditAction as Json;
     expect(auditAction.enum).toEqual([...AUDIT_ACTIONS]);
+
+    expect(AUDIT_ACTIONS).toEqual(
+      expect.arrayContaining([
+        'media.upload_started',
+        'media.upload_completed',
+        'media.upload_aborted',
+        'media.deleted',
+        'media.cleanup',
+      ]),
+    );
 
     const audit = ((document.paths as Json)['/api/v1/admin/audit'] as Json).get as Json;
     const actionParam = (audit.parameters as Json[]).find((param) => param.name === 'action') as Json;

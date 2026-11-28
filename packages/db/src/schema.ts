@@ -10,6 +10,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   boolean,
   check,
@@ -70,6 +71,10 @@ export type AuthTokenType = (typeof authTokenTypeValues)[number];
  */
 export const videoModeValues = ['inherit', 'custom', 'none'] as const;
 export type VideoMode = (typeof videoModeValues)[number];
+
+/** Resumable media upload session states (migration 0003). */
+export const mediaUploadStatusValues = ['uploading', 'completed', 'aborted', 'expired'] as const;
+export type MediaUploadStatus = (typeof mediaUploadStatusValues)[number];
 
 /* -------------------------------- enums ---------------------------------- */
 
@@ -286,6 +291,51 @@ export const records = pgTable(
     check(
       'records_quiz_score_range',
       sql`${t.quiz_score} is null or (${t.quiz_score} >= 0 and ${t.quiz_score} <= 100)`,
+    ),
+  ],
+);
+
+/* ------------------------------ media uploads ----------------------------- */
+
+/**
+ * Resumable upload sessions (F097). Chunks live under
+ * `MEDIA_DIR/.uploads/<id>/<index>.part`; the final object is written to the
+ * storage driver only after every chunk is present. `uploaded_chunks` is a
+ * JSON array of chunk indexes and is updated idempotently.
+ */
+export const mediaUploads = pgTable(
+  'media_uploads',
+  {
+    id: text('id').primaryKey(),
+    user_id: bigint('user_id', { mode: 'number' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    filename: text('filename').notNull(),
+    content_type: text('content_type').notNull(),
+    total_size: bigint('total_size', { mode: 'number' }).notNull(),
+    chunk_size: integer('chunk_size').notNull(),
+    total_chunks: integer('total_chunks').notNull(),
+    storage_driver: text('storage_driver').notNull(),
+    status: text('status').notNull().default('uploading'),
+    key: text('key').notNull(),
+    uploaded_chunks: jsonb('uploaded_chunks')
+      .$type<number[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index('idx_media_uploads_status_expires').on(t.status, t.expires_at),
+    index('idx_media_uploads_user').on(t.user_id),
+    check(
+      'media_uploads_status_check',
+      sql`${t.status} in ('uploading', 'completed', 'aborted', 'expired')`,
+    ),
+    check(
+      'media_uploads_chunk_math',
+      sql`${t.total_size} > 0 and ${t.chunk_size} > 0 and ${t.total_chunks} > 0`,
     ),
   ],
 );

@@ -1,6 +1,6 @@
 # 本地开发环境（v2）
 
-> 分支：`next`（v2.1.0） · 验证日期：2026-11-28 · 状态：已启动并验证（API 8787、Vite 5173；MinIO 9000/9001）
+> 分支：`next`（v2.2.0） · 验证日期：2026-11-28 · 状态：已启动并验证（API 8787、Vite 5173；PostgreSQL 5433 / Redis 6380 / MinIO 9000/9001）
 > 生产部署见 [DEPLOYMENT.md](DEPLOYMENT.md)；v1.2.0 零依赖离线版见文末。
 
 ## 1. 当前状态
@@ -50,7 +50,7 @@ chmod 600 .env
 # 编辑 ADMIN_EMAIL / ADMIN_PASSWORD；MAIL_FROM 含空格，必须保留引号
 
 # 4. 迁移 + 种子（开发默认导入 177 条示例记录）
-#    迁移含 0002_chapter_video（章节独立视频），升级已有库也必须执行
+#    迁移含 0002_chapter_video（章节独立视频）与 0003_media_uploads（分片上传会话），升级已有库也必须执行
 set -a; . ./.env; set +a
 npm run db:migrate
 npm run seed
@@ -105,10 +105,13 @@ VITE_API_TARGET=http://127.0.0.1:8788 npm run dev -w @portal/web
 | `MAIL_FROM` | `'AI Learning Portal <no-reply@local.test>'` | **含空格/尖括号，必须加引号** |
 | `SMTP_URL` | 未设置 | 仅 `MAIL_TRANSPORT=smtp` 需要；如 `smtp://user:pass@127.0.0.1:1025`（本地可用 Mailpit/MailHog） |
 | `STORAGE_DRIVER` | `local` | `local` 或 `s3`（本地开发一般保持 `local`） |
-| `MEDIA_DIR` | `./data/media` | 本地媒体目录（gitignored） |
-| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（服务端权威） |
-| `VITE_MEDIA_MAX_BYTES` | 未设置（回退 50 MB） | 仅 Vite 构建期前端提示；不改服务端限制 |
-| `MINIO_API_CORS_ALLOW_ORIGIN` | 仅 compose MinIO | 允许浏览器直传的源，默认 `http://127.0.0.1:5173,http://localhost:5173`；API 不读取 |
+| `MEDIA_DIR` | `./data/media` | 本地媒体目录（gitignored）；分片暂存于 `.uploads` |
+| `MEDIA_MAX_BYTES` | `2147483648`（2 GiB） | 分片上传总大小上限（服务端权威）；旧单请求端点 `min(该值, 50 MiB)` |
+| `MEDIA_CHUNK_SIZE` | `8388608`（8 MiB） | 分片大小 |
+| `MEDIA_UPLOAD_TTL_HOURS` | `24` | 上传会话与暂存分片有效期 |
+| `MEDIA_ORPHAN_GRACE_HOURS` | `24` | 孤儿清理宽限期 |
+| `VITE_MEDIA_MAX_BYTES` | 未设置（回退 2 GiB） | 仅 Vite 构建期前端提示；不改服务端限制 |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | 仅 compose MinIO | 仅旧预签名直传需要；默认 `http://127.0.0.1:5173,http://localhost:5173`；API 不读取 |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 未设置 | 仅 `STORAGE_DRIVER=s3` 需要；MinIO 用 §13 的 profile 提供 |
 | `S3_REGION` / `S3_FORCE_PATH_STYLE` / `S3_PUBLIC_URL` | `us-east-1` / `1` / 空 | MinIO 默认路径风格 |
 | `SEED_DEMO_RECORDS` | `1` | 允许示例记录 |
@@ -274,16 +277,29 @@ v1 与 v2 数据完全独立（SQLite 文件 vs PostgreSQL）。切换前先停�
 - 登录：`admin@local.test` 200，返回 `role=admin`
 - Python 数据分析筛选：17 人 / 55.9% / 81.1
 - 数据库：5 课程 / 30 章节 / 5 知识 / 177 记录
-- 测试：`npm test` 199 项通过（含章节视频三态/校验与媒体 `driver`/`path` 断言）；`npm run typecheck`、`npm run lint`、`npm run build` 通过。上传 UI 已在 local 与 MinIO 上实机复验；E2E 沿用 v2.1.0 P1 基线，最终打 tag 前复跑。
+- 测试：v2.1.0 基线为 `npm test` 199 项通过；v2.2.0 新增媒体库删除/清理与分片续传集成测试，最终以 `npm test` 实际输出为准（`npm run typecheck`、`npm run lint`、`npm run build` 需同时通过）。上传 UI 已在 local 与 MinIO 上实机复验；E2E 沿用 v2.1.0 P1 基线，最终打 tag 前复跑。
 
-## 13. 媒体存储、上传与 MinIO（本地）
+## 13. 媒体存储、上传、媒体库与 MinIO（本地）
 
 默认 `STORAGE_DRIVER=local`，上传文件落在 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 Range。管理端课程/章节表单可直接上传视频与封面（`MediaUploader`）：
 
-- `local`：`POST /api/v1/admin/media/upload` 原始直传（XHR 进度、CSRF、413 友好提示）。
-- `s3`：浏览器按 presign 返回的 `uploadUrl` 直接 `PUT`（`credentials: 'omit'`），需要对象存储 CORS；失败时上传器提示检查 CORS。
-- 表单只保存 presign 的稳定 `path`（`/api/v1/media/<key>`），不保存绝对/会过期的 `publicUrl`。
-- Nginx（容器内与示例）已把 `client_max_body_size` 提到 64m；CSP 已允许 `media-src 'self' blob:` 与 `img-src ... blob:`，用于上传前预览。
+- v2.2.0 默认走分片/断点续传（F098）：`POST /admin/media/uploads` 创建会话 → 2 路并发 `PUT /admin/media/uploads/:id/chunks/:index`（8 MiB 分片、XHR 进度）→ `POST .../complete`。总上限 `MEDIA_MAX_BYTES`（默认 2 GiB），暂存于 `data/media/.uploads/<id>/`。
+- 刷新/崩溃后按 `localStorage` 记录的会话 id 续传，跳过 `uploadedChunks`；取消会 `DELETE` 会话并删除暂存分片。
+- `s3` 模式下分片仍暂存本机，`complete` 由 API 服务端 `PutObject`；浏览器不再依赖对象存储 CORS。
+- 旧流程保留兼容但 UI 不使用：`local` 的 `POST /admin/media/upload` 原始直传（上限 50 MiB）或 `s3` 预签名 `PUT`（需 CORS）。
+- 表单只保存稳定 `path`（`/api/v1/media/<key>`），不保存绝对/会过期的 `publicUrl`。
+- 媒体库（F097）：管理后台“媒体库”标签可查看对象与引用、删除（被引用需 `force` 强制确认）、按宽限期预演/执行孤儿清理。
+- Nginx（容器内与示例）已把 `client_max_body_size` 提到 64m（对 8 MiB 分片足够）；CSP 已允许 `media-src 'self' blob:` 与 `img-src ... blob:`，用于上传前预览。
+
+本地验证分片上传的最短路径（`ai_portal_test` 或开发库均可，媒体只落磁盘）：
+
+```bash
+# 1) 创建会话（管理员会话 + CSRF）
+curl -b jar.txt -H 'Content-Type: application/json' -H "X-CSRF-Token: $T" \
+  -d '{"filename":"demo.mp4","contentType":"video/mp4","totalSize":9000000}' \
+  http://127.0.0.1:8787/api/v1/admin/media/uploads
+# 2) PUT 每个分片，3) POST .../complete，4) GET /api/v1/media/<key> 验证 Range
+```
 
 章节可独立配置视频（F096）：编辑章节时选择“继承课程视频 / 自定义本章视频 / 不显示视频”。自定义可上传或填站内 URL；公开章节页按章节三态解析，`none` 显示空状态。该能力依赖迁移 `0002_chapter_video.sql`。
 
@@ -308,9 +324,9 @@ S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=1
 ```
 
-重启 API 后，管理端“课程管理 → 视频 → custom”可直接上传文件（或填 `src=/api/v1/media/<key>`）；章节编辑同样支持上传。也可直接调 `POST /api/v1/admin/media/presign` 获取预签名 PUT 并上传。
+重启 API 后，管理端“课程管理 → 视频 → custom”可直接上传文件（或填 `src=/api/v1/media/<key>`）；章节编辑同样支持上传。分片上传在 S3 模式下也由 API 服务端组装并 `PutObject`，可直接调 `/admin/media/uploads*` 验证。
 
-- 开发 compose 的 MinIO 已设置 `MINIO_API_CORS_ALLOW_ORIGIN`（默认 Vite 5173 源）；改用其它前端源时同步该变量，否则浏览器直传预检失败。
+- 旧的浏览器预签名直传才需要 CORS：开发 compose 的 MinIO 已设置 `MINIO_API_CORS_ALLOW_ORIGIN`（默认 Vite 5173 源）；改用其它前端源时同步该变量，否则预检失败。新的分片上传不需要浏览器 CORS。
 - 端口 9000/9001 被占用时，在 compose 覆盖里改成 `9010:9000` / `9011:9001`，并同步 `S3_ENDPOINT`。
 - 本地媒体在 `data/media`，默认不纳入 git；`docker compose down -v` 不会删除宿主机目录，但会删 MinIO 的 `minio_data` 卷。
 - 不想用 S3 时把 `STORAGE_DRIVER` 改回 `local` 即可，公开页面不受影响。

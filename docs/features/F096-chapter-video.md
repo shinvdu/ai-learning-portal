@@ -74,3 +74,5 @@ ALTER TABLE "chapters" ADD CONSTRAINT "chapters_video_mode_payload"
 ## 备注
 
 课程级三态仍由 F061 负责；F096 只增加章节级三态与其公开解析。章节视频与课程视频一样不做转码/HLS，媒体对象需随数据库一起备份。
+
+v2.2.0 起，章节/课程视频的 `src`/`poster`（`/api/v1/media/<key>`）会被 [F097](F097-media-delete-orphan-cleanup.md) 的媒体库扫描为引用：删除被引用的对象默认返回 409（需 `force=1`），孤儿清理也会跳过被引用的对象。因此章节视频对象在替换后，旧 key 若不再被任何课程/章节引用才会进入孤儿清理候选。

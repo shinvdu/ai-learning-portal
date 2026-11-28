@@ -41,6 +41,11 @@ export const AUDIT_ACTIONS = [
   'data.reset',
   'data.snapshot_created',
   'data.snapshot_restored',
+  'media.upload_started',
+  'media.upload_completed',
+  'media.upload_aborted',
+  'media.deleted',
+  'media.cleanup',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -82,6 +87,11 @@ export const AUDIT_ACTION = {
   DATA_RESET: 'data.reset',
   DATA_SNAPSHOT_CREATED: 'data.snapshot_created',
   DATA_SNAPSHOT_RESTORED: 'data.snapshot_restored',
+  MEDIA_UPLOAD_STARTED: 'media.upload_started',
+  MEDIA_UPLOAD_COMPLETED: 'media.upload_completed',
+  MEDIA_UPLOAD_ABORTED: 'media.upload_aborted',
+  MEDIA_DELETED: 'media.deleted',
+  MEDIA_CLEANUP: 'media.cleanup',
 } as const satisfies Record<string, AuditAction>;
 
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS);

@@ -5,9 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-28
+
+媒体生命周期增强已随 v2.2.0 发布。208 项 Vitest、8/8 Playwright E2E、分片续传与 MinIO 实测均通过。
+
+### Added
+
+- **媒体库删除与孤儿清理（F097）**：`GET /api/v1/admin/media` 列出存储对象并扫描课程/章节 `video.src|poster` 中的 `/api/v1/media/<key>` 引用；`DELETE /api/v1/admin/media/:key` 默认拒绝删除仍被引用的对象（`409` + `references`），`force=1` 强制删除；`POST /api/v1/admin/media/cleanup` 删除未被引用且超过宽限期（`MEDIA_ORPHAN_GRACE_HOURS`，默认 24h）的对象，支持 `dryRun` 与 `graceHours`，并回收过期上传会话。被引用对象与进行中的 `.uploads` 分片永不清理。管理后台新增“媒体库”标签（列表、引用、删除/强制确认、清理预演/执行）。审计动作 `media.deleted`、`media.cleanup`。
+- **分片与断点续传上传（F098）**：新增迁移 `0003_media_uploads.sql` 与 `media_uploads` 会话表（状态/进度/过期，用户外键级联）；新增 `/api/v1/admin/media/uploads` 创建会话、`GET .../:id` 查询续传状态、`PUT .../:id/chunks/:index` 上传分片、`POST .../:id/complete` 组装落盘、`DELETE .../:id` 中止。默认 8 MiB 分片、总上限 `MEDIA_MAX_BYTES`（2 GiB）；分片暂存 `MEDIA_DIR/.uploads/<id>/`，24 小时过期（`MEDIA_UPLOAD_TTL_HOURS`）；S3 由服务端组装后 `PutObject`。管理端上传器改为分片上传，支持进度、取消与断点续传。审计动作 `media.upload_started`、`media.upload_completed`、`media.upload_aborted`。
+
+### Changed
+
+- `MEDIA_MAX_BYTES` 默认由 `52428800`（50 MB）提升为 `2147483648`（2 GiB），仅作用于分片上传；旧的单请求 `POST /admin/media/upload` 仍固定 `min(MEDIA_MAX_BYTES, 50 MiB)`。
+- 新增环境变量 `MEDIA_CHUNK_SIZE`（默认 8 MiB）、`MEDIA_UPLOAD_TTL_HOURS`（默认 24）、`MEDIA_ORPHAN_GRACE_HOURS`（默认 24）；`VITE_MEDIA_MAX_BYTES` 前端回退值改为 2 GiB。
+- 存储适配新增 `list`/`stat`/`remove`/`putFile`：S3 使用分页 `ListObjectsV2`、`HeadObject`、`DeleteObject` 与流式 `PutObject`。
+- 默认上传不再依赖浏览器预签名直传，`MINIO_API_CORS_ALLOW_ORIGIN` 仅对旧预签名流程需要；Nginx 64m 仍足够 8 MiB 分片。
+
+### Upgrade
+
+- `v2.1.0 → v2.2.0` **需要数据库迁移**：`npm ci && npm run db:migrate && npm run build` 后重启（生产 compose 的 `migrate` 任务会自动执行 `0003_media_uploads.sql`）。
+- `MEDIA_DIR` 需为 `complete` 预留空间（峰值约为文件 2 倍）；多实例下断点续传需粘性会话或共享卷。
+- 备份仍不含媒体对象：local 备份 `MEDIA_DIR`（含 `.meta`），S3 开启版本化/独立备份。
+
 ## [2.1.0] - 2026-11-28
 
-P1 增强将随 v2.1.0 发布（当前 `next` 分支，待最终 tag）。MinIO 基线实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）已通过；当前分支 199 项 Vitest 通过（typecheck/lint/build 通过）。上传 UI 的 local 与 MinIO 浏览器直传复验已通过；Playwright E2E 与最终 tag 验证在发布前执行。
+P1 增强已随 v2.1.0 发布。MinIO 基线实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）已通过；199 项 Vitest、typecheck/lint/build 与 8/8 Playwright E2E 在发布前通过。
 
 ### Added
 

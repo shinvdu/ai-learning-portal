@@ -1,7 +1,7 @@
 # AI Learning Portal v2 目标架构与重构方案
 
-> 状态：已实施；`v2.0.0` 与 `v2.1.0`（P1 增强）均已发布  
-> 发布：`main` 当前 `v2.1.0`；`v1.2.0` tag 保留为零依赖离线教学版  
+> 状态：已实施；`v2.0.0`、`v2.1.0`（P1）与 `v2.2.0`（媒体生命周期）均已发布  
+> 发布：`main` 当前 `v2.2.0`；`v1.2.0` tag 保留为零依赖离线教学版  
 > 更新日期：2026-11-28  
 > 本文是 v2 重构的**唯一总文档**；功能级细节见 `docs/features/`，进度与链接见 `docs/FEATURE_TRACKER.xlsx`。
 
@@ -11,7 +11,7 @@
 |---|---|
 | `docs/ARCHITECTURE_V2.md` | 本文：目标架构、数据模型、接口、里程碑、验收与风险 |
 | `docs/FEATURE_TRACKER.xlsx` | 功能追踪表：阶段、优先级、状态、依赖、验收标准、说明文件链接 |
-| `docs/features/` | 一个特性一个 Markdown 文件（51 项） |
+| `docs/features/` | 一个特性一个 Markdown 文件（53 项） |
 | `docs/DECISIONS.md` | 关键选型的 ADR 记录（随实施补充） |
 | `docs/ARCHITECTURE.md` | v1.x 架构（冻结，仅作历史参考） |
 | `docs/DEPLOYMENT.md` / `docs/DEMO_GUIDE.md` | v1.x 部署与演示（v2 发布后更新） |
@@ -380,7 +380,7 @@ SSO/OIDC/SAML/SCIM、多租户与细粒度 RBAC、审计保留/归档/WORM、Pro
 ## 10. 实施顺序（M0）
 
 1. `next` 分支（已创建）。
-2. 落盘本文、`FEATURE_TRACKER.xlsx`、`docs/features/` 51 个特性文件。
+2. 落盘本文、`FEATURE_TRACKER.xlsx`、`docs/features/` 53 个特性文件。
 3. 建 workspace 根配置与 `apps/*`、`packages/*` 骨架。
 4. 建 CI 骨架与 `.env.example`。
 5. 从 M1 开始按追踪表逐项实现。

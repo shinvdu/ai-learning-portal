@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#stack)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Version note**: `v2.1.0` is the current version (on `next`; it will merge to `main` and be tagged after final verification). It is the v2.0.0 product-grade rewrite plus P1: OpenAPI, data snapshots, SMTP, local/S3 media with an admin upload UI, per-chapter video, and the SQLite importer, and requires Node ≥ 24 plus container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
+> **Version note**: `v2.2.0` is the current release (the v2.0.0 product-grade rewrite plus v2.1.0 P1 and the v2.2.0 media lifecycle), requiring Node ≥ 24 and container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
 >
 > All courses, chapters, quizzes and learning records are simulated. Pages and documents must not contain real names, accounts or company data.
 
@@ -41,9 +41,9 @@
 - **Data insights**: records-driven insights, a metric formula table and common metric pitfalls.
 - **Authentication**: email registration/login/logout, email verification, forgot/reset password, TOTP MFA with one-time recovery codes, per-account lockout.
 - **Security**: Argon2id hashing (legacy scrypt upgrades transparently on login), PostgreSQL sessions (SHA-256 only), CSRF double-submit cookie + same-origin checks, Redis fixed-window rate limiting.
-- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (course-level three-state video, per-chapter inherit/custom/hidden video), video and poster uploads (local raw upload or S3 presign, with progress and preview), audit log, learning-record CRUD, CSV import/export and demo-data reset, plus **dataset snapshots**: every import/reset is snapshotted first and any snapshot can be restored with one click (a restore is itself reversible).
+- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (course-level three-state video, per-chapter inherit/custom/hidden video), video and poster uploads (chunked/resumable, with progress and preview), a **media library** (object list, reference scan, delete/force-delete, orphan-cleanup dry run and execution), audit log, learning-record CRUD, CSV import/export and demo-data reset, plus **dataset snapshots**: every import/reset is snapshotted first and any snapshot can be restored with one click (a restore is itself reversible).
 - **API docs**: an OpenAPI 3.1 spec generated from the zod contracts (`/api/v1/openapi.json`) and a Scalar reference UI (`/api/v1/docs`), gated in production by `ENABLE_API_DOCS`.
-- **Media and mail**: course media on local disk or S3/MinIO (`STORAGE_DRIVER`), persisted as the stable site-local path `/api/v1/media/<key>`, and mail over webhook or built-in SMTP (`MAIL_TRANSPORT=smtp`).
+- **Media and mail**: course media on local disk or S3/MinIO (`STORAGE_DRIVER`), persisted as the stable site-local path `/api/v1/media/<key>`; large files use chunked/resumable uploads (8 MiB chunks, 2 GiB total cap by default) and the media library scans references, refuses deleting referenced objects, and cleans up orphans. Mail runs over webhook or built-in SMTP (`MAIL_TRANSPORT=smtp`).
 - **Operations**: Docker Compose dev/prod stacks, Nginx TLS/SPA/rate limiting, `/healthz` and `/readyz`, structured logs with `X-Request-Id`, `pg_dump` backup and restore scripts.
 
 ## Stack
@@ -114,7 +114,7 @@ npm ci
 cp .env.example .env
 set -a; . ./.env; set +a              # scripts do not load .env automatically
 
-# 3. Migrate + seed (includes the 0002_chapter_video migration)
+# 3. Migrate + seed (includes chapter video 0002 and media upload sessions 0003)
 npm run db:migrate
 npm run seed                          # dev imports the 177 demo records by default
 
@@ -177,14 +177,14 @@ See [SECURITY.md](SECURITY.md) for the full model and reporting process. Highlig
 - MFA secrets are stored encrypted with AES-256-GCM using `MFA_ENC_KEY`; rotating the key invalidates existing MFA enrolments.
 - CSRF double submit (`aip_csrf` cookie + `X-CSRF-Token`) plus same-origin checks for mutating requests that carry `Origin`.
 - Redis fixed-window limits: public auth endpoints 20/IP/10 min; account-sensitive endpoints 10/user/10 min. Redis failure degrades to in-process counting.
-- Append-only audit trail: auth, users, courses/chapters, record CRUD, CSV import/export, dataset reset.
+- Append-only audit trail: auth, users, courses/chapters, record CRUD, CSV import/export, dataset reset, media upload/delete/cleanup.
 - Production mode requires `ADMIN_PASSWORD`, `MFA_ENC_KEY`, `PUBLIC_BASE_URL` and a non-console mail transport; the process exits at startup otherwise.
 
 ## API
 
 - Canonical prefix `/api/v1`; the legacy `/api` alias reuses the same router and only adds `Deprecation: true` and `Link: <...>; rel="successor-version"`.
 - Cookies + CSRF, error envelope, pagination, the full endpoint tables, audit actions and examples are in [docs/API.md](docs/API.md).
-- OpenAPI 3.1: `GET /api/v1/openapi.json` is always readable; the Scalar UI at `GET /api/v1/docs` is served outside production or when `ENABLE_API_DOCS=1`, otherwise 404. Media (`/media/{key}`) and dataset-snapshot endpoints are part of the spec.
+- OpenAPI 3.1: `GET /api/v1/openapi.json` is always readable; the Scalar UI at `GET /api/v1/docs` is served outside production or when `ENABLE_API_DOCS=1`, otherwise 404. Media (`/media/{key}`, chunked uploads `/admin/media/uploads*`, media library `/admin/media`) and dataset-snapshot endpoints are part of the spec.
 
 ## Project layout
 
@@ -226,21 +226,18 @@ npm run test:e2e      # Playwright smoke
 
 - Integration tests create `ai_portal_test`, apply migrations and seed it; the development database is untouched.
 - End-to-end demo steps and the acceptance checklist are in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
-- Pre/post-release checklist: [docs/RELEASE_NOTES_v2.1.0.md](docs/RELEASE_NOTES_v2.1.0.md).
+- Pre/post-release checklist: [docs/RELEASE_NOTES_v2.2.0.md](docs/RELEASE_NOTES_v2.2.0.md) and [docs/RELEASE_NOTES_v2.1.0.md](docs/RELEASE_NOTES_v2.1.0.md) (released).
 
 ## P1 capabilities and known limitations
 
-The following P1 capabilities ship with `v2.1.0` (currently on `next`; verification is re-run before the final tag):
+P1 capabilities already released in v2.1.0: OpenAPI + Scalar (F036), CSV snapshots and restore (F064), SMTP (F049 extension), local/S3 media (F094), the admin media upload UI (F095), per-chapter video (F096), and the SQLite → PostgreSQL importer (F100).
 
-- **OpenAPI + Scalar (F036)**: `/api/v1/openapi.json` and `/api/v1/docs`, see [API docs](docs/API.md).
-- **CSV snapshots and restore (F064)**: automatic snapshot before import/reset; the admin "data snapshots" tab restores any snapshot. See [API docs](docs/API.md) and [deployment](docs/DEPLOYMENT.md).
-- **SMTP (F049 extension)**: `MAIL_TRANSPORT=smtp` + `SMTP_URL`, see [deployment](docs/DEPLOYMENT.md).
-- **Local/S3 media (F094)**: `STORAGE_DRIVER` + `S3_*`; MinIO is available through the dev `media` profile, see [local development](docs/DEVELOPMENT.md).
-- **Admin media upload UI (F095)**: upload video and poster files from the course/chapter form over local raw upload or S3 presign, with progress, drag-and-drop and preview; the form stores the stable `/api/v1/media/<key>` path. See [feature notes](docs/features/F095-admin-media-upload-ui.md).
-- **Per-chapter video (F096)**: each chapter can inherit the course video, override it, or hide it; the public chapter API resolves the chapter's three-state video. Upgrading requires `npm run db:migrate` (`0002_chapter_video.sql`). See [feature notes](docs/features/F096-chapter-video.md).
-- **SQLite → PostgreSQL importer (F100)**: `npm run import:sqlite`; start with `--dry-run`, see [local development](docs/DEVELOPMENT.md).
+`v2.2.0` adds:
 
-MinIO has passed the baseline live verification (RELEASE.2024-12-18: presigned PUT/GET + Range 206 and the course video reference); the browser upload UI has been re-verified with both the local driver and MinIO. `v2.0.0 → v2.1.0` **requires a database migration** for the new chapter video columns (`npm run db:migrate`); migrate before seeding a fresh database too.
+- **Media library deletion and orphan cleanup (F097)**: `GET /admin/media` lists objects and scans course/chapter references; `DELETE /admin/media/:key` refuses referenced objects unless `force=1`; `POST /admin/media/cleanup` supports `dryRun` and a grace period and never deletes referenced objects or in-progress upload chunks; the admin area gains a "media library" tab. See [feature notes](docs/features/F097-media-delete-orphan-cleanup.md).
+- **Chunked, resumable uploads (F098)**: a new `media_uploads` session table and `/admin/media/uploads*` endpoints; 8 MiB chunks and a 2 GiB total cap by default (configurable), staged under `MEDIA_DIR/.uploads`, expiring after 24 hours; S3 objects are assembled server-side then `PutObject`; the uploader supports progress, cancel and resume. See [feature notes](docs/features/F098-chunked-resumable-upload.md).
+
+MinIO has passed the baseline live verification (RELEASE.2024-12-18: presigned PUT/GET + Range 206 and the course video reference); the browser upload UI has been re-verified with both the local driver and MinIO. Upgrading to `v2.2.0` **requires database migrations** (`0002_chapter_video.sql` + `0003_media_uploads.sql`, `npm run db:migrate`); migrate before seeding a fresh database too.
 
 New environment variables (full defaults and production requirements in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)):
 
@@ -250,9 +247,12 @@ New environment variables (full defaults and production requirements in [docs/DE
 | `MAIL_TRANSPORT` | `console` (dev) | `webhook` / `smtp` / `console`; `console` rejected in production |
 | `SMTP_URL` | empty | Required for `MAIL_TRANSPORT=smtp`; `smtp://` or `smtps://` |
 | `STORAGE_DRIVER` | `local` | `local` or `s3` |
-| `MEDIA_DIR` | `./data/media` | Local media directory |
-| `MEDIA_MAX_BYTES` | `52428800` | Per-file upload cap (~50 MB) |
-| `VITE_MEDIA_MAX_BYTES` | empty (falls back to 50 MB) | Build-time client-side upload cap hint; the server's `MEDIA_MAX_BYTES` remains authoritative |
+| `MEDIA_DIR` | `./data/media` | Local media directory; chunks are staged under `.uploads` |
+| `MEDIA_MAX_BYTES` | `2147483648` (2 GiB) | Total chunked-upload cap; the legacy raw endpoint stays `min(this, 50 MiB)` |
+| `MEDIA_CHUNK_SIZE` | `8388608` (8 MiB) | Chunk size |
+| `MEDIA_UPLOAD_TTL_HOURS` | `24` | Upload-session and staged-chunk TTL |
+| `MEDIA_ORPHAN_GRACE_HOURS` | `24` | Orphan-cleanup grace period |
+| `VITE_MEDIA_MAX_BYTES` | empty (falls back to 2 GiB) | Build-time client-side upload cap hint; the server's `MEDIA_MAX_BYTES` remains authoritative |
 | `MINIO_API_CORS_ALLOW_ORIGIN` | Vite dev origins | Dev-compose MinIO only; origins allowed to do direct browser PUT uploads. Configure separately for an external MinIO |
 | `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | empty | Required for `STORAGE_DRIVER=s3`; credentials stay server-side |
 | `S3_ENDPOINT` | empty | Required for MinIO (e.g. `http://127.0.0.1:9000`); optional for AWS |

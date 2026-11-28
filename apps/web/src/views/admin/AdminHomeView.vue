@@ -12,6 +12,7 @@ import ChangePasswordDialog from '@/components/admin/ChangePasswordDialog.vue';
 import CourseTable from '@/components/admin/CourseTable.vue';
 import CreateUserDialog from '@/components/admin/CreateUserDialog.vue';
 import DatasetSnapshots from '@/components/admin/DatasetSnapshots.vue';
+import MediaLibrary from '@/components/admin/MediaLibrary.vue';
 import UserTable from '@/components/admin/UserTable.vue';
 import { apiErrorList, conflictRecordCount } from '@/components/admin/apiErrors';
 import { deleteAdminCourse } from '@/components/admin/adminCourseApi';
@@ -23,6 +24,7 @@ const tabs: { id: string; label: string }[] = [
   { id: 'users', label: '用户管理' },
   { id: 'courses', label: '课程管理' },
   { id: 'snapshots', label: '数据快照' },
+  { id: 'media', label: '媒体库' },
   { id: 'audit', label: '审计日志' },
 ];
 
@@ -255,7 +257,9 @@ function finishDelete(course: AdminCourse, deletedRecords: number): void {
 
     <DatasetSnapshots v-else-if="activeTab === 'snapshots'" @restored="loadAudit" />
 
-    <AuditTable v-else :rows="audit" />
+    <MediaLibrary v-else-if="activeTab === 'media'" />
+
+    <AuditTable v-else-if="activeTab === 'audit'" :rows="audit" />
 
     <p class="footnote">本页面操作的是模拟数据；所有管理操作都会写入审计日志。</p>
   </template>
