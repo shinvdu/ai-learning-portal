@@ -2,7 +2,7 @@
 
 **AI 学习与数据分析门户** —— 课程广场、课程详情、章节学习、知识中心、学习看板和数据洞察的生产级重写。所有 KPI 都由 PostgreSQL 中的原始学习记录计算：改一条数据，指标与图表立即变化。
 
-[English](README.en.md) · [目标架构](docs/ARCHITECTURE_V2.md) · [架构决策](docs/DECISIONS.md) · [API](docs/API.md) · [部署](docs/DEPLOYMENT.md) · [演示指南](docs/DEMO_GUIDE.md) · [生产就绪度](docs/PRODUCTION_READINESS.md) · [变更日志](CHANGELOG.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md)
+[English](README.en.md) · [目标架构](docs/ARCHITECTURE_V2.md) · [架构决策](docs/DECISIONS.md) · [本地开发](docs/DEVELOPMENT.md) · [API](docs/API.md) · [部署](docs/DEPLOYMENT.md) · [演示指南](docs/DEMO_GUIDE.md) · [生产就绪度](docs/PRODUCTION_READINESS.md) · [变更日志](CHANGELOG.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md)
 
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?logo=node.js&logoColor=white)](#技术栈)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](#技术栈)
@@ -102,6 +102,8 @@ docker compose -p portalprod -f deploy/compose.prod.yml --env-file deploy/.env.p
 
 ### B) 本地开发
 
+完整环境说明（端口、变量、日志、排障、数据库重置）见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
 ```bash
 # 1. 启动基础设施（开发 compose 默认只启动这两个服务）
 docker compose up -d postgres redis   # postgres 127.0.0.1:5433 / redis 127.0.0.1:6380
@@ -115,13 +117,14 @@ set -a; . ./.env; set +a              # 脚本不会自动读取 .env，需显�
 npm run db:migrate
 npm run seed                          # 开发环境默认导入 177 条示例记录
 
-# 4. 同时启动 API 与 Vite
-npm run dev
+# 4. 同时启动 API 与 Vite（脚本自动加载 .env）
+./scripts/dev-local.sh
+# 或（已在当前 shell 导出 .env 时）：npm run dev
 ```
 
 - Web：<http://127.0.0.1:5173>（Vite 将 `/api` 代理到 `http://127.0.0.1:8787`）
 - API：<http://127.0.0.1:8787>，健康检查 `/healthz`、`/readyz`
-- 默认管理员：`admin@example.com` / `change-me-before-use`（来自 `.env.example`，仅限本地；演示前请更换）
+- 默认管理员由 `.env` 的 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 决定（`.env.example` 是 `admin@example.com` / `change-me-before-use` 占位；本机当前值见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)，仅限本地，演示/生产前必须更换）
 
 只启动 API：`npm run dev -w @portal/api`；只启动 Web：`npm run dev -w @portal/web`。
 
