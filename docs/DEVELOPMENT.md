@@ -1,6 +1,6 @@
 # 本地开发环境（v2）
 
-> 分支：`next` · 验证日期：2026-11-28 · 状态：开发进程当前已停止；下列命令与口径仍有效
+> 分支：`next`（v2.1.0） · 验证日期：2026-11-28 · 状态：已启动并验证（API 8787、Vite 5173；MinIO 9000/9001）
 > 生产部署见 [DEPLOYMENT.md](DEPLOYMENT.md)；v1.2.0 零依赖离线版见文末。
 
 ## 1. 当前状态
@@ -15,7 +15,7 @@
 | 缓存/限流 | Redis 7（容器端口 6380，开发用 DB 0） |
 | 数据 | 5 门课 / 30 章 / 5 知识 / 177 条记录 |
 | golden 指标 | 24 学生 / 5 课程 / 58 选课 / 74.3% / 86.4 / 165.3h |
-| 进程 | `npm run dev`（`tsx watch` + `vite`）；当前 API/Vite 已停止，按 §3 重新启动 |
+| 进程 | `npm run dev`（`tsx watch` + `vite`）；当前已启动；日志 `/tmp/portal-dev.log` |
 
 最后验证（2026-11-28）：`/healthz` 200、`/readyz` 200、Vite 200、`/api/v1/meta` 返回 golden 值、管理员登录 200、`/api/v1/dashboard?course=Python 数据分析` 返回 17 人 / 55.9%。
 
