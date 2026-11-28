@@ -86,23 +86,25 @@ onBeforeUnmount(() => {
     />
     <p v-if="empty" class="empty-chart" role="status">{{ emptyText }}</p>
 
-    <table v-if="!empty && table" class="sr-only">
-      <caption>
-        {{
-          table.caption ?? chartLabel
-        }}
-      </caption>
-      <thead>
-        <tr>
-          <th v-for="header in table.headers" :key="header" scope="col">{{ header }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="(row, rowIndex) in table.rows" :key="rowIndex">
-          <td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-if="!empty && table" class="sr-only">
+      <table>
+        <caption>
+          {{
+            table.caption ?? chartLabel
+          }}
+        </caption>
+        <thead>
+          <tr>
+            <th v-for="header in table.headers" :key="header" scope="col">{{ header }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(row, rowIndex) in table.rows" :key="rowIndex">
+            <td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
 
