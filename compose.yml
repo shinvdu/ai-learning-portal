@@ -1,0 +1,141 @@
+# Development compose.
+#
+# Plain `docker compose up -d` starts only postgres (host 5433) and redis
+# (host 6380) — the existing dev flow is unchanged. The app services live under
+# the `full` profile so they never start implicitly:
+#
+#   docker compose --profile full up -d --build
+#   open http://127.0.0.1:8080
+#
+# In-container traffic uses service names (postgres:5432, redis:6379, api:8787)
+# regardless of what `.env` says; host port mappings stay as-is for tools that
+# run on the host.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: portal
+      POSTGRES_DB: ai_portal
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal -d ai_portal"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # One-shot: apply Drizzle migrations before the API starts.
+  migrate:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    image: ai-learning-portal-api:dev
+    command: ["node", "packages/db/dist/migrate.js"]
+    environment:
+      APP_ENV: development
+      NODE_ENV: development
+      DATABASE_URL: postgres://portal:portal@postgres:5432/ai_portal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: seed catalogue, chapters and demo learning records.
+  seed:
+    profiles: ["full"]
+    image: ai-learning-portal-api:dev
+    command: ["node", "apps/api/dist/seed/seed.js", "--demo-records"]
+    environment:
+      APP_ENV: development
+      NODE_ENV: development
+      DATABASE_URL: postgres://portal:portal@postgres:5432/ai_portal
+      SEED_DEMO_RECORDS: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    image: ai-learning-portal-api:dev
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-development}
+      HOST: 0.0.0.0
+      PORT: "8787"
+      DATABASE_URL: postgres://portal:portal@postgres:5432/ai_portal
+      REDIS_URL: redis://redis:6379/0
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8080}
+      SERVE_WEB: "0"
+      TRUST_PROXY: "1"
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-console}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-before-use}
+      SEED_DEMO_RECORDS: "1"
+      ALLOW_DEMO_RESET: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  web:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    image: ai-learning-portal-web:dev
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

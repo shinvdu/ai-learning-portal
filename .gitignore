@@ -5,7 +5,19 @@ data/portal.db-wal
 *.log
 .env
 .env.*
+!.env.example
 coverage/
 backups/
+*.dump
 .DS_Store
 .idea/
+
+# v2 build and tooling artifacts
+dist/
+.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Office lock files (e.g. docs/.~FEATURE_TRACKER.xlsx while Excel is open)
+.~*

@@ -1,78 +1,126 @@
-# Demo Guide
+# 演示指南（v2.0.0）
 
-A short walkthrough for showing the portal, plus a checklist to verify the "numbers are computed, not hardcoded" claim.
+本指南用于课堂演示、验收与回归。所有数字均为**模拟数据**；页面与文档不得出现真实姓名、账号或公司数据。
 
-## 5-minute walkthrough
+- 访问路径为 history 路由（如 `/dashboard`）；旧的 v1 hash 链接（`#/dashboard`）会自动重定向。
+- 账号通过环境变量提供，不在仓库或文档中写死真实凭据。
 
-| Time | Page | What to show | What to click |
-|---|---|---|---|
-| 0:00–0:50 | `#/home` | Five courses, category filters, search; all data comes from one simulated CSV | Filter a category, search "Python", open a course |
-| 0:50–1:30 | `#/course/C3` | Sample video, chapter list with reach rates | Play the video; click a chapter |
-| 1:30–2:30 | `#/dashboard` | 5 KPIs and 6 charts; students = 24, not 177; completion is computed per enrollment | Point at the KPI formula hints |
-| 2:30–3:30 | Data playground | Edit one record and watch every number change | Edit a record → save → compare KPIs → reset |
-| 3:30–4:15 | `#/knowledge/C1` | Summary, glossary, FAQ, quiz with sources | Answer the 3 questions, submit, show explanations |
-| 4:15–5:00 | `#/insights` | Insights with concrete numbers and actions; common metric mistakes | Show the formula table and pitfalls |
+## 1. 启动演示环境
 
-## 10-minute extended walkthrough
-
-Add:
-
-1. CSV export → modify one value → re-import → verify metrics change.
-2. Filter the dashboard by a single course and compare its KPIs.
-3. Open `#/chapter/C3/4` and explain the inferred chapter reach.
-4. Resize to a phone width; charts switch to a compact layout.
-
-## Admin setup and walkthrough
-
-Start with explicit credentials for a predictable demo:
+### Docker 生产形态（推荐课堂演示）
 
 ```bash
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
+cp deploy/env.example deploy/.env.prod    # 填写 POSTGRES_PASSWORD / ADMIN_* / MFA_ENC_KEY / 邮件
+docker compose -p portalprod -f deploy/compose.prod.yml --env-file deploy/.env.prod up -d --build
+# 打开 http://127.0.0.1:8080
 ```
 
-1. Open `#/login`, sign in with the admin account.
-2. Open `#/account`: enable MFA with an authenticator, save recovery codes, then open `管理后台`.
-3. **Users**: create a learner, switch a role, disable an account, reset a password/MFA, unlock a locked account. Show that the last active admin cannot be demoted or disabled.
-4. **审计**: scroll to the audit panel and show recent login/admin/data events.
-5. **Courses**: edit a course name/color/video, add a chapter, edit its body, then open the public course page and chapter page to see the change.
-6. Back on `#/dashboard`, expand the data playground and edit a record.
-7. `#/register` creates a normal learner. A learner can browse public pages but cannot see the admin area or edit data.
+### 本地开发
 
-## Live data playground
+```bash
+docker compose up -d postgres redis
+npm ci
+cp .env.example .env
+set -a; . ./.env; set +a
+npm run db:migrate
+npm run seed
+npm run dev
+# 打开 http://127.0.0.1:5173
+```
 
-1. Open `#/dashboard`.
-2. Expand **数据演示（可编辑）** at the bottom.
-3. Click **编辑** on any record.
-4. Change `chapters_done` (and optionally `quiz_score`).
-5. Save. The KPI cards and charts recalculate from SQLite.
-6. Click **恢复初始数据** to return to the seed dataset.
+管理员账号来自 `ADMIN_EMAIL` / `ADMIN_PASSWORD`：
 
-Expected example: editing a Python record from `5/8` to `8/8` raises average completion from **74.3%** to **74.9%**.
+- 本地模板默认 `admin@example.com` / `change-me-before-use`（仅演示，不要用于生产）。
+- 生产形态必须使用 `deploy/.env.prod` 中自行填写的强密码；首启时若系统中没有活跃管理员，会按该邮箱创建。
 
-Other playground actions:
+学习者可在开发环境直接注册（开发模式自动视为已验证）；生产环境注册需点击验证邮件。
 
-- **新增记录** changes student / enrollment counts.
-- **导入 CSV** replaces the whole records table after validation.
-- **导出 CSV** downloads a UTF-8 BOM file that opens cleanly in Excel.
+## 2. 五分钟演示
 
-## Talking points
+| 时间 | 页面 | 展示内容 | 操作 |
+|---|---|---|---|
+| 0:00–0:50 | `/` 课程广场 | 5 门课程、分类筛选、搜索；数据全部来自同一份模拟 CSV | 选一个分类、搜索 “Python”、打开课程 |
+| 0:50–1:30 | `/courses/C3` 课程详情 | 示例视频、带推断到达率的章节目录 | 播放视频并拖动进度；点开一章 |
+| 1:30–2:30 | `/dashboard` 学习看板 | 5 个 KPI、6 张图表；学生数是 24 而不是 177 | 指向 KPI 的公式提示；切换课程筛选 |
+| 2:30–3:30 | `/dashboard` 数据演示面板（管理员） | 改一条记录，所有指标与图表立即重算 | 编辑记录 → 保存 → 对比 KPI → 恢复初始数据 |
+| 3:30–4:15 | `/knowledge/C1` 知识中心 | 摘要、术语、FAQ、3 道题及答案解析 | 答题并提交，展示解析与原文出处 |
+| 4:15–5:00 | `/insights` 数据洞察 | 带具体数字与行动建议的洞察、公式表、常见口径误区 | 展示 Python 数据分析的 17 人 / 55.9% |
 
-- Every KPI has a visible formula; the UI shows `max(chapters_done) / total_chapters`, not a magic number.
-- Missing quiz scores are excluded, not treated as zero.
-- Chapter reach is explicitly labelled as an inference because the source CSV has no per-chapter records.
-- Write endpoints are unauthenticated: this is a demo, not a production LMS.
-- Zero dependencies means the demo runs offline; charts are plain SVG.
+## 3. 十分钟扩展
 
-## Verification checklist
+在五分钟版本基础上增加：
 
-- [ ] `npm run verify` passes.
-- [ ] Changing one record changes the KPI and at least one chart.
-- [ ] Restoring seed data returns completion to 74.3% and score to 86.4.
-- [ ] Course video plays and can be seeked.
-- [ ] Chapter page video plays; reach rates match the course detail list.
-- [ ] Quiz accepts answers and shows explanations with sources.
-- [ ] `#/dashboard?course=Python%20%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90` filters KPIs to 17 learners / 55.9%.
-- [ ] Admin login works; anonymous/learner write requests are rejected with 401/403.
-- [ ] Course/chapter edits made in the admin UI immediately appear on public pages.
-- [ ] Mobile width (≈390px) is readable; charts use the compact layout.
-- [ ] No console errors.
+1. `/records` 相关能力走管理员面板：导出 CSV → 修改一个值 → 重新导入 → 指标变化 → 恢复示例数据。
+2. 看板按单门课筛选，对比该课程的 KPI 与全站 KPI。
+3. 打开 `/courses/C3/chapters/4`，解释章节到达率为“推断值”。
+4. 缩到手机宽度（≈390px），图表切换为紧凑布局，导航仍可用。
+5. 登录 → `/account` 启用 MFA → 退出 → 用 TOTP/恢复码重新登录。
+6. `/admin` 展示审计日志中刚才的操作。
+
+## 4. 登录与管理员引导
+
+1. `/login` 使用 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 登录。
+2. `/account`：查看账户与安全设置；可启用 MFA 并保存 8 枚一次性恢复码。
+3. `/admin` → **用户管理**：创建学习者、调整角色、停用账号、重置密码/MFA、解锁；演示“最后一个管理员不可降级/停用”。
+4. `/admin` → **课程管理**：改名/主题色/视频三态、新增章节、编辑正文；回到公开课程页确认即时生效。
+5. `/admin` → **审计日志**：按动作过滤，展示登录、管理、数据事件。
+6. `/dashboard` 底部 → **数据演示面板**：记录 CRUD、CSV 导入/导出、恢复示例数据。
+7. `/register` 注册学习者：可浏览公开页，但 `/admin` 与写接口被路由与 API 双重拦截（403）。
+
+## 5. 现场数据演示
+
+1. 打开 `/dashboard`，管理员可见底部 **数据演示面板**。
+2. 任选一条记录点击 **编辑**。
+3. 修改 `chapters_done`（可同时改 `quiz_score`）。
+4. 保存：KPI 卡片与全部图表从 PostgreSQL 重新计算。
+5. 点击 **恢复初始数据** 回到种子数据集。
+
+示例预期：把一条 Python 记录从 `5/8` 改为 `8/8`，平均完成率从 **74.3%** 升到 **74.9%**。
+
+其他操作：
+
+- **新增记录** 会改变学生/选课计数。
+- **导入 CSV** 在校验通过后整表替换。
+- **导出 CSV** 下载 UTF-8 BOM + CRLF 文件，Excel 可直接打开。
+
+## 6. 验证清单
+
+启动后逐项确认：
+
+- [ ] `npm run typecheck && npm run lint && npm run build` 通过。
+- [ ] `npm test` 与 `npm run test:e2e` 通过。
+- [ ] 首页/看板显示 **24** 名学生、**5** 门课、**58** 条选课。
+- [ ] 平均完成率 **74.3%**、平均测验成绩 **86.4**（53 条有成绩 / 5 条无成绩）。
+- [ ] 累计学习时长 **165.3 小时**（9,916 分钟）。
+- [ ] 课程详情共 **30** 个章节；第 1 章到达率 100%，后续单调不增。
+- [ ] `/dashboard?course=Python%20%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90` 筛选为 **17** 人 / **55.9%**。
+- [ ] 改一条记录后 KPI 与至少一张图表变化；恢复初始数据回到 golden。
+- [ ] 课程视频可播放、可拖动（`Range: bytes=0-99` 返回 206）。
+- [ ] 注册 → 验证 → 登录 → MFA 设置/启用/恢复码登录 → 修改密码 → 重置密码全流程可用。
+- [ ] 学习者访问 `/admin`、写记录、导出 CSV 均被拒绝（401/403）。
+- [ ] 管理员全部功能可用；破坏性操作有二次确认。
+- [ ] 旧 hash 链接（如 `#/dashboard`）自动跳转到新路径。
+- [ ] 390px 宽度下图表紧凑、导航可用。
+- [ ] 浏览器控制台无错误。
+
+## 7. v1.2.0 离线演示
+
+无 Docker、无 PostgreSQL/Redis 的教室机器：
+
+```bash
+git checkout v1.2.0
+npm start        # 零依赖、SQLite；http://127.0.0.1:8787
+git checkout next
+```
+
+- v1.2.0 使用 `data/portal.db`，页面为 hash 路由（`#/home`、`#/dashboard`），管理员通过 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 环境变量引导。
+- v1.2.0 与 v2 数据完全独立；切换标签不会影响 v2 的 PostgreSQL。
+- 演示口径与 v2 相同（24 / 5 / 58 / 74.3% / 86.4 / 165.3），可对照讲解“重写后指标不变”。
+
+## 8. 讲解要点
+
+- 每个 KPI 都有可见公式：完成率取 `max(chapters_done) / total_chapters`，不是写死的数字。
+- 缺失测验成绩被排除，不按 0 分计算。
+- 章节到达率明确标注为推断值，因为源 CSV 没有逐章埋点。
+- v2 的写接口需要管理员会话 + CSRF；不再是 v1 的开放演示接口。
+- 数据全部为模拟数据；生产部署前需完成 P1 中的数据导入与合规评估。

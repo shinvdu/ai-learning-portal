@@ -1,0 +1,83 @@
+import { z } from 'zod';
+
+/**
+ * Stable audit action strings. These values are written to `audit_log.action`
+ * and may be used as exact filters by the admin audit query, so they must not
+ * change once released.
+ */
+export const AUDIT_ACTIONS = [
+  'auth.register',
+  'auth.verification_mail_failed',
+  'auth.login_failed',
+  'auth.login_inactive',
+  'auth.login_locked',
+  'auth.mfa_challenge',
+  'auth.login',
+  'auth.mfa_failed',
+  'auth.login_mfa',
+  'auth.email_verified',
+  'auth.verification_resent',
+  'auth.password_reset_requested',
+  'auth.password_reset',
+  'auth.password_changed',
+  'auth.mfa_setup_started',
+  'auth.mfa_enabled',
+  'auth.mfa_disabled',
+  'auth.logout',
+  'admin.user_created',
+  'admin.user_updated',
+  'admin.course_created',
+  'admin.course_updated',
+  'admin.course_deleted',
+  'admin.chapter_created',
+  'admin.chapter_updated',
+  'admin.chapter_deleted',
+  'data.record_created',
+  'data.record_updated',
+  'data.record_deleted',
+  'data.csv_imported',
+  'data.csv_reset',
+  'data.csv_exported',
+  'data.reset',
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** Named aliases for use in code, e.g. `AUDIT_ACTION.AUTH_LOGIN`. */
+export const AUDIT_ACTION = {
+  AUTH_REGISTER: 'auth.register',
+  AUTH_VERIFICATION_MAIL_FAILED: 'auth.verification_mail_failed',
+  AUTH_LOGIN_FAILED: 'auth.login_failed',
+  AUTH_LOGIN_INACTIVE: 'auth.login_inactive',
+  AUTH_LOGIN_LOCKED: 'auth.login_locked',
+  AUTH_MFA_CHALLENGE: 'auth.mfa_challenge',
+  AUTH_LOGIN: 'auth.login',
+  AUTH_MFA_FAILED: 'auth.mfa_failed',
+  AUTH_LOGIN_MFA: 'auth.login_mfa',
+  AUTH_EMAIL_VERIFIED: 'auth.email_verified',
+  AUTH_VERIFICATION_RESENT: 'auth.verification_resent',
+  AUTH_PASSWORD_RESET_REQUESTED: 'auth.password_reset_requested',
+  AUTH_PASSWORD_RESET: 'auth.password_reset',
+  AUTH_PASSWORD_CHANGED: 'auth.password_changed',
+  AUTH_MFA_SETUP_STARTED: 'auth.mfa_setup_started',
+  AUTH_MFA_ENABLED: 'auth.mfa_enabled',
+  AUTH_MFA_DISABLED: 'auth.mfa_disabled',
+  AUTH_LOGOUT: 'auth.logout',
+  ADMIN_USER_CREATED: 'admin.user_created',
+  ADMIN_USER_UPDATED: 'admin.user_updated',
+  ADMIN_COURSE_CREATED: 'admin.course_created',
+  ADMIN_COURSE_UPDATED: 'admin.course_updated',
+  ADMIN_COURSE_DELETED: 'admin.course_deleted',
+  ADMIN_CHAPTER_CREATED: 'admin.chapter_created',
+  ADMIN_CHAPTER_UPDATED: 'admin.chapter_updated',
+  ADMIN_CHAPTER_DELETED: 'admin.chapter_deleted',
+  DATA_RECORD_CREATED: 'data.record_created',
+  DATA_RECORD_UPDATED: 'data.record_updated',
+  DATA_RECORD_DELETED: 'data.record_deleted',
+  DATA_CSV_IMPORTED: 'data.csv_imported',
+  DATA_CSV_RESET: 'data.csv_reset',
+  DATA_CSV_EXPORTED: 'data.csv_exported',
+  DATA_RESET: 'data.reset',
+} as const satisfies Record<string, AuditAction>;
+
+export const AuditActionSchema = z.enum(AUDIT_ACTIONS);

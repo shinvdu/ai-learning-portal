@@ -1,0 +1,218 @@
+# Production edge reverse proxy for the AI Learning Portal v2.
+#
+# Place at /etc/nginx/conf.d/portal.conf (Debian/Ubuntu) or include it from the
+# http {} block. It assumes a SINGLE HOST deployment:
+#
+#   - the API runs as the systemd unit deploy/systemd/ai-learning-portal.service
+#     bound to 127.0.0.1:8787 (HOST=127.0.0.1, PORT=8787);
+#   - the built web app (npm run build -w @portal/web -> apps/web/dist) has been
+#     copied to /var/www/ai-learning-portal.
+#
+# For container networks, replace every `http://127.0.0.1:8787` with
+# `http://api:8787` (or the compose service name) and either keep a shared
+# volume at /var/www/ai-learning-portal or proxy `/` to `http://web:80`
+# instead of serving it here. The upstream is declared once below; the
+# proxy_pass lines use it.
+#
+# Nginx does NOT inherit server-level add_header directives into a location
+# that declares its own add_header, so the two static locations repeat the
+# full security-header set.
+
+limit_req_zone $binary_remote_addr zone=portal_auth:10m rate=20r/m;
+limit_req_zone $binary_remote_addr zone=portal_api:10m rate=600r/m;
+
+upstream portal_api_upstream {
+    server 127.0.0.1:8787;
+    keepalive 16;
+}
+
+# ---------------------------------------------------------------------------
+# HTTP -> HTTPS. ACME HTTP-01 challenges stay on :80; everything else redirects.
+# ---------------------------------------------------------------------------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name learning.example.com;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # Internal health probes may speak plain HTTP on the node itself.
+    location = /healthz {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    location = /readyz {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# HTTPS edge.
+# ---------------------------------------------------------------------------
+server {
+    # `listen ... http2` is deprecated in nginx >= 1.25.1 (use `http2 on;`) but it
+    # remains the portable spelling: Debian 12 / Ubuntu 22.04-24.04 ship nginx
+    # 1.22-1.24, where `http2 on;` is not available. Newer builds log a warning.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name learning.example.com;
+
+    # Replace with your certificate paths (e.g. Let's Encrypt).
+    ssl_certificate     /etc/letsencrypt/live/learning.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/learning.example.com/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_session_cache shared:portal_ssl:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+
+    root /var/www/ai-learning-portal;
+    index index.html;
+
+    # Uploads are small JSON/CSV bodies; the API enforces its own 2MB limit and
+    # returns the canonical 413 envelope, so the edge allows 3m of headroom.
+    client_max_body_size 3m;
+
+    # --- security headers (mirror apps/api/src/middleware/security-headers.ts) ---
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" always;
+
+    error_log  /var/log/nginx/ai-learning-portal.error.log warn;
+    access_log /var/log/nginx/ai-learning-portal.access.log;
+
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
+
+    # The API (helmet) also emits these; drop its copies so the edge is the
+    # single source. Browsers honour only the FIRST HSTS header, so this keeps
+    # the 1-year max-age below instead of the API's shorter value.
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header Permissions-Policy;
+    proxy_hide_header Cross-Origin-Opener-Policy;
+    proxy_hide_header Cross-Origin-Resource-Policy;
+    proxy_hide_header Content-Security-Policy;
+
+    # Auth endpoints (canonical /api/v1/auth/* and legacy /api/auth/*) get the
+    # tighter per-IP bucket. Regex locations are evaluated before prefixes.
+    location ~ ^/api/(?:v1/)?auth/(?:.*)$ {
+        limit_req zone=portal_auth burst=10 nodelay;
+        limit_req_status 429;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    # All other API traffic (canonical /api/v1/* and legacy /api/*). The bare
+    # /api path is matched exactly so it reaches the API's JSON 404 instead of
+    # the SPA shell.
+    location = /api {
+        limit_req zone=portal_api burst=60 nodelay;
+        limit_req_status 429;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    location /api/ {
+        limit_req zone=portal_api burst=60 nodelay;
+        limit_req_status 429;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    # Health checks are loopback-only; they must never be reachable publicly.
+    location = /healthz {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    location = /readyz {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        proxy_pass http://portal_api_upstream;
+    }
+
+    # Hashed Vite bundles and media: immutable for one year.
+    location /assets/ {
+        try_files $uri =404;
+        access_log off;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" always;
+    }
+
+    # The HTML shell is never cached so a deploy is picked up immediately.
+    # `expires -1` emits `Cache-Control: no-cache` without clobbering add_header.
+    location = /index.html {
+        expires -1;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests" always;
+    }
+
+    # History-mode SPA: unknown paths (deep links) fall back to index.html,
+    # which is handled by the no-cache block above via internal redirect.
+    location / {
+        try_files $uri $uri/ /index.html;
+        expires -1;
+    }
+}

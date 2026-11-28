@@ -1,0 +1,159 @@
+# Production-shaped compose for the AI Learning Portal v2.
+#
+# Project-safe: no PostgreSQL/Redis host ports are published, and the data
+# volumes are distinct from the dev compose (portal_prod_* vs postgres_data).
+#
+# Usage (from the repository root):
+#
+#   cp deploy/env.example deploy/.env.prod   # then fill in real values
+#   docker compose -p portalprod -f deploy/compose.prod.yml \
+#     --env-file deploy/.env.prod build
+#   docker compose -p portalprod -f deploy/compose.prod.yml \
+#     --env-file deploy/.env.prod up -d
+#   docker compose -p portalprod -f deploy/compose.prod.yml \
+#     --env-file deploy/.env.prod ps
+#
+# `-p` keeps container/network names separate from any dev stack. The
+# `--env-file` values are passed to every service through `environment:` below
+# (Compose only uses `--env-file` for interpolation; it does not inject the
+# file into containers on its own).
+# PostgreSQL credentials come from the env file (POSTGRES_PASSWORD) and must
+# match the password inside DATABASE_URL; both live in `deploy/.env.prod`.
+# POSTGRES_USER/POSTGRES_DB default to portal/ai_portal.
+#
+# This stack is demo-shaped: the `seed` job imports the packaged demo records
+# with an explicit `--demo-records` flag. For a real deployment, drop that flag
+# and set SEED_DEMO_RECORDS=0 / ALLOW_DEMO_RESET=0 in `.env.prod`.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-portal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portal}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_portal}
+    volumes:
+      - portal_prod_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-portal} -d ${POSTGRES_DB:-ai_portal}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - portal_prod_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot migration job. `restart: "no"` lets the dependency gate below
+  # distinguish success from failure.
+  migrate:
+    image: ai-learning-portal-api:prod
+    command: ["node", "packages/db/dist/migrate.js"]
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot seed job: catalogue, chapters, knowledge and demo records.
+  seed:
+    image: ai-learning-portal-api:prod
+    command: ["node", "apps/api/dist/seed/seed.js", "--demo-records"]
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SEED_DEMO_RECORDS: "${SEED_DEMO_RECORDS:-1}"
+      ALLOW_DEMO_RESET: "${ALLOW_DEMO_RESET:-0}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    image: ai-learning-portal-api:prod
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8787"
+      SERVE_WEB: "0"
+      TRUST_PROXY: "1"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      MFA_ENC_KEY: ${MFA_ENC_KEY:?MFA_ENC_KEY is required}
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-webhook}
+      MAIL_WEBHOOK_URL: ${MAIL_WEBHOOK_URL:-}
+      MAIL_WEBHOOK_TOKEN: ${MAIL_WEBHOOK_TOKEN:-}
+      MAIL_FROM: "${MAIL_FROM:-AI Learning Portal <no-reply@example.com>}"
+      SEED_DEMO_RECORDS: "${SEED_DEMO_RECORDS:-0}"
+      ALLOW_DEMO_RESET: "${ALLOW_DEMO_RESET:-0}"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENABLE_API_DOCS: "${ENABLE_API_DOCS:-0}"
+    expose:
+      - "8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  web:
+    image: ai-learning-portal-web:prod
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  portal_prod_pgdata:
+    name: portal_prod_pgdata
+  portal_prod_redisdata:
+    name: portal_prod_redisdata

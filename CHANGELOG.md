@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-28
+
+产品级重写。`v1.2.0` 标签继续保留为零依赖、SQLite 的离线教学版，可按 tag 检出运行。
+
+### Breaking changes
+
+- **运行时栈整体替换**：由零依赖 `node:http` + `node:sqlite` + 原生前端，改为 **Express 5 + TypeScript + Vue 3 + Vite + PostgreSQL 16 + Redis 7**。
+- 运行 v2 需要 Node.js ≥ 24、PostgreSQL 16、Redis 7 与构建步骤（`npm ci && npm run build`）；不再支持直接 `npm start`。
+- API 规范前缀改为 `/api/v1`；旧 `/api` 保留薄别名，响应新增 `Deprecation: true` 与 successor `Link` 头。
+- 前端由 hash 路由改为 history 路由；旧 `#/...` 链接会自动重定向到新路径。
+- 数据存储由 SQLite 文件改为 PostgreSQL；**没有自动的 SQLite → PostgreSQL 迁移**（导入器为 P1，见下文）。
+- 学习记录改用 `course_id` 外键 + `records_with_course_name` 视图；课程改名不再级联改写历史记录。
+- 视频配置改为显式 `video_mode` 枚举（`inherit` / `custom` / `none`）+ `jsonb`，消除 v1 的 NULL 与 `"null"` 双重语义。
+
+### Added
+
+- npm workspaces 单仓库：`apps/api`、`apps/web`、`packages/{config,contracts,content,db,domain}`，TypeScript project references。
+- PostgreSQL + Drizzle SQL 迁移，迁移 runner 使用 `pg_advisory_lock`，`/readyz` 校验迁移 journal。
+- Vue 3 SPA：课程广场、课程详情、章节、知识中心、学习看板、数据洞察、登录/注册/验证/重置、账户与 MFA、管理后台、数据演示面板。
+- 管理 API：用户、课程/章节、视频三态、记录 CRUD 与分页、CSV 导入（`dry_run`）/导出、审计查询、恢复示例数据。
+- 密码重置、邮箱验证、TOTP MFA + 一次性恢复码、账号锁定与管理员解锁、最后活跃管理员保护。
+- 只追加审计日志（固定动作名），请求 ID（`X-Request-Id`）、pino JSON 日志、慢请求告警、敏感字段脱敏。
+- 健康检查 `/healthz`（存活）与 `/readyz`（PostgreSQL + Redis + 迁移）。
+- Docker Compose 开发编排（`compose.yml`，postgres 5433 / redis 6380）与生产编排（`deploy/compose.prod.yml`，不发布 PG/Redis 端口、独立卷）。
+- 边缘 Nginx 示例（TLS 1.2/1.3、HSTS、CSP、SPA fallback、immutable 静态、限流、内网健康检查）与 systemd 单元。
+- `scripts/backup.sh`（`pg_dump -Fc` + 完整性校验 + 14 天保留）、`scripts/restore.sh`（`--clean --if-exists`，需确认）、`scripts/healthcheck.sh`。
+- CI：typecheck/lint/build、Vitest（PG/Redis 服务）、Playwright 冒烟。
+
+### Changed
+
+- 密码哈希由 scrypt 升级为 Argon2id；旧 `scrypt$...` 哈希在登录成功后透明重哈希，用户无需重置。
+- 会话由 SQLite 表迁到 PostgreSQL，token 只存 SHA-256；Redis 仅用于限流计数。
+- 限流由进程内 Map 改为 Redis 固定窗口（成功登录清除桶）；Redis 故障回退进程内 Map 并降级 readiness。
+- 知识中心、章节测验、数据分析口径由 `packages/domain` / `packages/content` 计算，公开页不暴露原始记录。
+- 生产模式启动时强制校验 `DATABASE_URL`、`REDIS_URL`、`PUBLIC_BASE_URL`、`MFA_ENC_KEY`、`ADMIN_PASSWORD` 与非 console 邮件传输。
+
+### Security
+
+- 一次性令牌（邮箱验证、密码重置、MFA challenge）**强制校验过期**（修复 v1 可复用过期令牌的问题）。
+- 密码使用 Argon2id（`@node-rs/argon2`）。
+- TOTP secret 使用 AES-256-GCM 加密后落库（`MFA_ENC_KEY`）；恢复码只存哈希。
+- 限流迁移到 Redis，多实例共享计数；Redis 故障不影响登录。
+- CSRF 双提交（`aip_csrf` + `X-CSRF-Token`）叠加同源 `Origin` 校验。
+- 安全响应头：helmet 基线 + Nginx HSTS/CSP/COOP/CORP/Permissions-Policy；Cookie 为 `HttpOnly` + `SameSite=Lax`，HTTPS 自动 `Secure`。
+- 审计日志只追加；密码、会话 token、验证/重置 token 不写入日志。
+
+### Migration and seed notes
+
+- 全新数据库：`npm run db:migrate` → `npm run seed`（开发默认导入 177 条示例记录）；生产 compose 的 `seed` 使用 `--demo-records`。
+- 生产环境默认 `SEED_DEMO_RECORDS=0`、`ALLOW_DEMO_RESET=0`；演示需显式开启。
+- `seed --reset` 会删除 records → chapters → knowledge → courses 后重建；生产还需 `ALLOW_DEMO_RESET=1`。
+- `course_seq` 与课程高水位对齐，删除最新课程后新建仍单调递增。
+- 从 v1.2.0 升级：**先完成 SQLite → PostgreSQL 导入**（P1，尚未提供）；当前示例站可直接重新 seed，不要在有真实数据的库上执行 seed。
+
+### Known limitations
+
+- OpenAPI/Scalar、CSV 快照与撤销、SMTP、MinIO/S3、SQLite 导入器、Playwright 全量矩阵均为 P1（详见 [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)）。
+- 无 SSO/OIDC/SAML、SCIM、多租户、资源级权限；无 WAL/PITR；无指标/Tracing APM。
+- 管理员 MFA 支持但不强制。
+- 迁移无自动回滚；回滚依赖备份恢复或检出旧 tag。
+
 ## [1.2.0] - 2026-11-28
 
 ### Added

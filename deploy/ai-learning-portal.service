@@ -1,21 +1,60 @@
+# Compatibility copy. The canonical v2 unit is
+# deploy/systemd/ai-learning-portal.service (with its env template
+# deploy/systemd/ai-learning-portal.env.example). This file is kept so older
+# deploy scripts that reference deploy/ai-learning-portal.service keep working;
+# if you edit one, update the other (or install the canonical file and drop
+# this copy).
+
 [Unit]
-Description=AI Learning Portal
-After=network.target
+Description=AI Learning Portal v2 API
+Documentation=file:/opt/ai-learning-portal/docs/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=ai-portal
 Group=ai-portal
 WorkingDirectory=/opt/ai-learning-portal
+# Required, mode 0600, owned by root. See deploy/systemd/ai-learning-portal.env.example
+# for the full v2 key set (DATABASE_URL, REDIS_URL, PUBLIC_BASE_URL, MFA_ENC_KEY,
+# ADMIN_*, MAIL_*, LOG_LEVEL, TRUST_PROXY). The API validates it at start-up and
+# exits non-zero on a missing production value.
 EnvironmentFile=/etc/ai-learning-portal.env
-ExecStart=/usr/bin/node server.js
+ExecStart=/usr/bin/node apps/api/dist/index.js
 Restart=on-failure
 RestartSec=5
+# The app drains in-flight requests for up to 10s on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+SyslogIdentifier=ai-learning-portal
+UMask=0027
+
+# --- hardening ------------------------------------------------------------
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/ai-learning-portal /opt/ai-learning-portal/backups
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# ProtectSystem=strict makes the whole tree read-only; grant write access only
+# to the directories the API and the backup job actually use. The database and
+# Redis live on separate hosts/services, so no database files belong here.
+# The "-" prefix ignores a path that does not exist yet (create data/ and
+# backups/ on first install; see docs/DEPLOYMENT.md).
+ReadWritePaths=-/opt/ai-learning-portal/data -/opt/ai-learning-portal/backups
 
 [Install]
 WantedBy=multi-user.target

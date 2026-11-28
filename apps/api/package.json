@@ -1,0 +1,40 @@
+{
+  "name": "@portal/api",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b --pretty",
+    "seed": "tsx src/seed/seed.ts"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
+    "@portal/config": "*",
+    "@portal/contracts": "*",
+    "@portal/content": "*",
+    "@portal/db": "*",
+    "@portal/domain": "*",
+    "cookie-parser": "^1.4.7",
+    "drizzle-orm": "^0.45.4",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "ioredis": "^6.1.0",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.4",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.2",
+    "tsx": "^4.23.15"
+  }
+}

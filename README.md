@@ -1,392 +1,244 @@
-# AI Learning Portal
+# AI Learning Portal v2
 
-**AI 学习与数据分析门户** —— 一个零依赖、可直接运行的 Node.js + SQLite 教学演示项目。
+**AI 学习与数据分析门户** —— 课程广场、课程详情、章节学习、知识中心、学习看板和数据洞察的生产级重写。所有 KPI 都由 PostgreSQL 中的原始学习记录计算：改一条数据，指标与图表立即变化。
 
-[English](README.en.md) · [架构文档](docs/ARCHITECTURE.md) · [部署指南](docs/DEPLOYMENT.md) · [生产化路线](docs/PRODUCTION_READINESS.md) · [演示指南](docs/DEMO_GUIDE.md) · [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
+[English](README.en.md) · [目标架构](docs/ARCHITECTURE_V2.md) · [架构决策](docs/DECISIONS.md) · [API](docs/API.md) · [部署](docs/DEPLOYMENT.md) · [演示指南](docs/DEMO_GUIDE.md) · [生产就绪度](docs/PRODUCTION_READINESS.md) · [变更日志](CHANGELOG.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md)
 
-[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?logo=node.js&logoColor=white)](#快速开始)
-[![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=white)](#技术栈)
-[![Dependencies](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)](#技术栈)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?logo=node.js&logoColor=white)](#技术栈)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](#技术栈)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![AI Learning Portal 首页](docs/screenshots/home.jpg)
-
-覆盖 **课程广场、课程详情、知识中心、学习看板、数据洞察** 五个模块，并额外提供章节页、登录注册、管理员后台（用户 / 课程 / 章节）与管理员数据演示面板。所有 KPI 都由 SQLite 中的原始学习记录计算——改一条数据，指标与图表立即变化。
-
-> 这是一个演示/参考实现：示例数据与课程内容为模拟内容。现已包含邮箱验证、密码重置、MFA、审计、账号锁定、CSRF、版本化 migration 与备份，可作为**单节点受控生产**的基础；但仍缺少 PostgreSQL/Redis 多实例、SSO、多租户、审计保留与完整合规能力，不应直接当作公网 SaaS。
-
-> Live demo（早期部署，可能落后于 main）：https://77fpveqc.qwenwork.host/
+> **版本说明**：`v2.0.0` 是产品级重写（Node.js + PostgreSQL + Redis + Vue 3 构建版），需要 Node ≥ 24 与容器基础设施。`v1.2.0` 标签永久保留为零依赖、SQLite、单文件的**离线教学版**，见 [v1.2.0 离线版](#c-v120-零依赖离线版)。
+>
+> 示例课程、章节、测验与学习记录全部为模拟数据；页面与文档不得包含真实姓名、账号或公司数据。
 
 ---
 
 ## 目录
 
 - [功能](#功能)
-- [快速开始](#快速开始)
-- [页面与截图](#页面与截图)
 - [技术栈](#技术栈)
-- [为什么不用 Vue / 构建工具](#为什么不用-vue--构建工具)
-- [数据与指标口径](#数据与指标口径)
-- [章节数据（推断口径）](#章节数据推断口径)
+- [架构](#架构)
+- [快速开始](#快速开始)
+- [指标口径与 golden 值](#指标口径与-golden-值)
+- [安全](#安全)
 - [API](#api)
-- [配置](#配置)
-- [开发与测试](#开发与测试)
-- [替换内容与视频](#替换内容与视频)
-- [部署](#部署)
-- [安全说明](#安全说明)
 - [项目结构](#项目结构)
-- [已知限制](#已知限制)
-- [贡献](#贡献)
+- [开发与测试](#开发与测试)
+- [P1 范围与已知限制](#p1-范围与已知限制)
 - [许可证](#许可证)
 
 ---
 
 ## 功能
 
-- **课程广场**：5 门课程卡片，分类筛选、关键字搜索、按学习人数 / 完成率 / 成绩排序。
-- **课程详情**：简介、讲师、难度、8 秒示例视频、带到达率的章节目录。
-- **章节页（30 个）**：讲义原文、统一示例视频、本章测验、到达率与全课程章节对比、上/下一章。
-- **知识中心**：每门课一套 200 字摘要、学习目标、5 个知识点、5 个术语、3 条 FAQ、3 道带答案解析的测验、原文摘录、AI 初稿 → 人工修正对照。
-- **学习看板**：5 个 KPI、6 张纯 SVG 图表、课程筛选、数据源状态。
-- **数据洞察**：由数据动态生成的洞察、指标公式表、常见口径误区。
-- **登录与注册**：邮箱 + 密码注册/登录/退出，scrypt 密码哈希，HttpOnly 会话 Cookie；生产模式要求邮箱验证。
-- **密码找回**：忘记密码邮件、单次重置令牌、重置后撤销全部旧会话。
-- **MFA**：TOTP + 8 枚一次性恢复码，可在账号页启用/停用；管理员可重置用户 MFA。
-- **账号锁定**：连续失败按账号锁定 15 分钟，管理员可解锁。
-- **审计日志**：登录、密码、MFA、角色、课程/章节、记录与 CSV 操作为管理员留存。
-- **用户管理（管理员）**：列表、创建用户、调整角色、启停账号、修改密码、标记邮箱验证、解锁；保护最后一个管理员。
-- **课程管理（管理员）**：课程信息、主题色、视频、排序；章节新增/编辑/删除；课程名称变更自动同步学习记录。
-- **数据演示面板（管理员）**：编辑 / 新增 / 删除记录，导入 / 导出 CSV，恢复初始数据；每次变更后全部指标重新计算。
-- **零依赖、零构建**：不需要 `npm install`，离线可用；图表不依赖 CDN。
-- **响应式**：桌面与手机宽度均做了布局与图表适配。
-
-## 快速开始
-
-要求 **Node.js ≥ 24**（使用内置 `node:sqlite`，没有第三方依赖）。
-
-```bash
-git clone https://github.com/shinvdu/ai-learning-portal.git
-cd ai-learning-portal
-
-npm start
-# 打开 http://127.0.0.1:8787
-```
-
-也可以直接执行 `./start.sh`（Linux/macOS）或双击 `start.bat`（Windows）。
-
-- 首次启动自动创建 `data/portal.db`，并从 `data/learning_records.csv` 导入 177 条模拟学习记录。
-- 首次启动会自动创建一个管理员账号。建议显式指定密码：
-
-```bash
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-me-please' npm start
-```
-
-如果没有设置 `ADMIN_PASSWORD`，程序会生成随机密码并打印在启动日志中（只打印一次）。
-- 开发/演示模式（默认）注册后自动登录；`APP_ENV=production` 时新用户必须完成邮箱验证。
-- 普通用户可以自行注册；管理员登录后从右上角“管理后台”进入用户与课程管理。
-- 局域网演示：`HOST=0.0.0.0 npm start`，访问 `http://<本机IP>:8787`。请只在可信网络内使用。
-
-**受控生产部署（单节点）**：见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。最小配置：
-
-```bash
-APP_ENV=production \
-PUBLIC_BASE_URL=https://learning.example.com \
-MAIL_WEBHOOK_URL=https://mail-relay.example.com/send \
-MAIL_WEBHOOK_TOKEN='...' \
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='a-long-random-password' \
-PORTAL_DB=/var/lib/ai-learning-portal/portal.db \
-HOST=127.0.0.1 npm start
-```
-
-生产模式不会导入示例学习记录，要求配置邮件网关，并要求显式管理员密码。
-
-## 页面与截图
-
-| 路由 | 页面 |
-|---|---|
-| `#/home` | 课程广场 |
-| `#/course/C3` | 课程详情（视频 + 章节目录） |
-| `#/chapter/C3/4` | 章节页（原文 + 视频 + 测验 + 推断数据） |
-| `#/knowledge/C1` | 知识中心 |
-| `#/dashboard` | 学习看板 |
-| `#/insights` | 数据洞察 |
-| `#/login` / `#/register` | 登录 / 注册 |
-| `#/forgot` / `#/reset?token=` | 忘记密码 / 重置密码 |
-| `#/verify?token=` | 邮箱验证 |
-| `#/account` | 账号设置（密码、MFA、验证状态） |
-| `#/admin` | 管理后台（用户、课程、审计） |
-| `#/admin/course/C3` | 课程与章节编辑（管理员） |
-
-| 学习看板（管理员，含数据面板） | 章节页 |
-|---|---|
-| ![学习看板](docs/screenshots/dashboard.jpg) | ![章节页](docs/screenshots/chapter.jpg) |
-| **知识中心** | **移动端** |
-| ![知识中心](docs/screenshots/knowledge.jpg) | <img src="docs/screenshots/mobile.jpg" alt="移动端首页" width="260"> |
-| **登录** | **管理后台（含审计）** |
-| ![登录](docs/screenshots/login.jpg) | ![管理后台](docs/screenshots/admin.jpg) |
-
-**账号设置（密码 / MFA）**：<img src="docs/screenshots/account.jpg" alt="账号设置与 MFA" width="720">
+- **课程广场**：5 门课程卡片，分类筛选、关键字搜索、学习人数/完成率/成绩统计。
+- **课程详情**：简介、讲师、难度、示例视频、带推断到达率的章节目录。
+- **章节学习（30 章）**：讲义原文、示例视频（HTTP Range 支持拖动）、本章测验、到达率与全课程对比、上一章/下一章。
+- **知识中心**：课程摘要、学习目标、知识点、术语、FAQ、3 道带答案与解析的测验、原文摘录、AI 初稿 → 人工修正对照。
+- **学习看板**：5 个 KPI、6 张 ECharts 图表、课程筛选、数据源状态；管理员可展开数据演示面板。
+- **数据洞察**：由记录动态生成的洞察、指标公式表、常见口径误区。
+- **认证**：邮箱注册/登录/退出、邮箱验证、忘记/重置密码、TOTP MFA + 一次性恢复码、按账号锁定。
+- **安全**：Argon2id 密码哈希（旧 scrypt 登录后透明升级）、PostgreSQL 会话（仅存 SHA-256）、CSRF 双提交 Cookie + 同源校验、Redis 固定窗口限流。
+- **管理后台**：用户管理（角色/启停/密码/MFA/解锁）、课程与章节管理（视频三态）、审计日志、学习记录 CRUD、CSV 导入/导出/恢复示例数据。
+- **运维**：Docker Compose 开发/生产编排、Nginx TLS/SPA/限流、`/healthz` 与 `/readyz`、结构化日志与 `X-Request-Id`、`pg_dump` 备份与恢复脚本。
 
 ## 技术栈
 
-| 层 | 选择 | 说明 |
+| 层 | 选型 |
+|---|---|
+| API | Express 5 + TypeScript (ESM) + zod + pino + helmet |
+| Web | Vue 3 + Vite + Vue Router 5 + Pinia + ECharts 6，自建 CSS 设计系统 |
+| 数据库 | PostgreSQL 16 + Drizzle ORM（SQL 迁移 + advisory lock） |
+| 缓存/限流 | Redis 7（固定窗口限流，故障时降级为进程内 Map） |
+| 密码/MFA | `@node-rs/argon2`（Argon2id）+ TOTP；MFA secret 用 AES-256-GCM 加密存储 |
+| 运行时 | Node.js ≥ 24，npm workspaces |
+| 交付 | Docker Compose + Nginx 1.27，可选 systemd |
+
+## 架构
+
+- 目标架构、模块边界、数据模型与验收基线：[docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md)
+- 关键选型与取舍（ADR）：[docs/DECISIONS.md](docs/DECISIONS.md)
+- API 规范路径 `/api/v1`，保留旧 `/api` 薄别名（带 `Deprecation` / `Link` 响应头）。
+
+```
+浏览器 ──HTTPS──> Nginx (TLS/HSTS/静态/SPA/边缘限流)
+                    ├── /            -> Vue 构建产物
+                    ├── /api/v1/*    -> API (8787)
+                    └── /healthz,/readyz -> API（仅内网）
+API ──> PostgreSQL 16（会话/用户/课程/记录/审计）
+    └──> Redis 7（限流计数）
+```
+
+## 快速开始
+
+### A) Docker Compose 生产形态演示
+
+仓库根目录已提供 `deploy/compose.prod.yml`：不发布 PostgreSQL/Redis 主机端口，数据卷为独立的 `portal_prod_pgdata` / `portal_prod_redisdata`，不会影响开发栈。
+
+```bash
+# 1. 复制并填写生产环境模板（占位值必须替换）
+cp deploy/env.example deploy/.env.prod
+chmod 600 deploy/.env.prod
+#   - DATABASE_URL 中的密码，例如 postgres://portal:<密码>@postgres:5432/ai_portal
+#   - POSTGRES_PASSWORD：与 DATABASE_URL 中的密码相同（数据库初始化用）
+#   - ADMIN_EMAIL / ADMIN_PASSWORD（首次启动创建管理员）
+#   - MFA_ENC_KEY：openssl rand -base64 32
+#   - MAIL_TRANSPORT=webhook + MAIL_WEBHOOK_URL（生产禁止 console）
+
+# 2. deploy/.env.prod 同时保存 POSTGRES_PASSWORD；它必须与 DATABASE_URL 中的密码一致。
+#    必须用 --env-file 传入，compose 会把这些值注入各服务（否则 DATABASE_URL 等不会进入容器）。
+docker compose -p portalprod -f deploy/compose.prod.yml --env-file deploy/.env.prod build
+docker compose -p portalprod -f deploy/compose.prod.yml --env-file deploy/.env.prod up -d
+docker compose -p portalprod -f deploy/compose.prod.yml --env-file deploy/.env.prod ps
+
+# 3. 打开 http://127.0.0.1:8080 ，用 ADMIN_EMAIL / ADMIN_PASSWORD 登录
+```
+
+`migrate` → `seed` → `api` → `web` 按依赖顺序自动执行；`seed` 带 `--demo-records`，因此会导入 177 条示例记录。真实部署应去掉该参数并将 `SEED_DEMO_RECORDS`、`ALLOW_DEMO_RESET` 设为 `0`。生产 compose 的 `web` 只监听 HTTP 8080，TLS 由边缘 Nginx 终止（见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)）。
+
+> 生产模式要求可用的邮件传输。没有真实邮件网关时，管理员登录与浏览仍可用；注册、邮箱验证、找回密码会因网关不可达而报 `MAIL_FAILED`，演示前请配置 `MAIL_WEBHOOK_URL`。
+
+### B) 本地开发
+
+```bash
+# 1. 启动基础设施（开发 compose 默认只启动这两个服务）
+docker compose up -d postgres redis   # postgres 127.0.0.1:5433 / redis 127.0.0.1:6380
+
+# 2. 安装依赖、加载本地环境变量
+npm ci
+cp .env.example .env
+set -a; . ./.env; set +a              # 脚本不会自动读取 .env，需显式导出
+
+# 3. 迁移 + 种子
+npm run db:migrate
+npm run seed                          # 开发环境默认导入 177 条示例记录
+
+# 4. 同时启动 API 与 Vite
+npm run dev
+```
+
+- Web：<http://127.0.0.1:5173>（Vite 将 `/api` 代理到 `http://127.0.0.1:8787`）
+- API：<http://127.0.0.1:8787>，健康检查 `/healthz`、`/readyz`
+- 默认管理员：`admin@example.com` / `change-me-before-use`（来自 `.env.example`，仅限本地；演示前请更换）
+
+只启动 API：`npm run dev -w @portal/api`；只启动 Web：`npm run dev -w @portal/web`。
+
+### C) v1.2.0 零依赖离线版
+
+`v1.2.0` 标签是原零依赖 Node.js + SQLite + 原生前端版本，适合无 Docker、无 PostgreSQL/Redis 的教室环境：
+
+```bash
+git checkout v1.2.0
+npm start          # 无需 npm install；http://127.0.0.1:8787
+# 返回 v2：
+git checkout next
+```
+
+v1.2.0 的数据为 `data/portal.db`（SQLite），与 v2 的 PostgreSQL 数据完全独立；回退切换不会改动 v2 数据。
+
+## 指标口径与 golden 值
+
+数据源：`packages/db/fixtures/learning_records.csv`（177 行，24 名学生，5 门课，2026-11-04 至 2026-11-17）。
+
+| 指标 | 口径 | 值 |
 |---|---|---|
-| 后端 | Node.js 24 `node:http` | 手写路由、静态服务、JSON API，零框架 |
-| 数据库 | `node:sqlite` | Node 内置 SQLite，无需编译原生模块 |
-| 前端 | 原生 ES Modules + hash 路由 | 公开页面 + 登录注册 + 管理后台，无构建步骤 |
-| 图表 | 手写 SVG | 离线可用，不依赖 ECharts / CDN |
-| 样式 | 原生 CSS + 自定义属性 | 深海军蓝 / 青绿色视觉系统，响应式 |
-| 视频 | ffmpeg 生成的 8 秒 MP4 | 统一示例视频，支持 HTTP Range |
-| 认证 | scrypt + SQLite 会话 + TOTP | HttpOnly / SameSite Cookie、一次性令牌、审计 |
-| 运维 | 版本化 SQLite migration + `VACUUM INTO` 备份 | 单节点最小生产形态 |
-| 测试 | `scripts/verify.js` | 指标口径、内容完整性、资源校验（临时数据库） |
-
-## 为什么不用 Vue / 构建工具
-
-- 公开页面、章节页、登录注册与简单后台，状态仍然可控，原生 hash 路由 + `fetch` 已经足够。
-- 离线 / 内网 / U 盘环境下，零构建、零依赖最稳；不需要 `npm install` 或打包步骤。
-- 图表手写 SVG，避免外部图表库加载失败导致页面空白。
-- 这套结构也是一个“单文件 HTML 原型”的进阶参考：学生可以先做单文件版本，再理解前后端分离。
-
-如果后续需要多角色登录、复杂组件复用、长期多人协作，再引入 Vue 3 + Vite 等方案是合理的。当前规模下，构建链带来的风险大于收益。
-
-## 数据与指标口径
-
-演示数据集：**177 条记录 / 24 名学生 / 5 门课程 / 58 条选课**（2026-11-04 至 2026-11-17）。
-
-| 指标 | 口径 | 演示值 |
-|---|---|---|
-| 学生人数 | `COUNT(DISTINCT student_id)` | 24 |
-| 课程数量 | `COUNT(DISTINCT course_name)` | 5 |
+| 学生数 | `student_id` 去重 | 24 |
+| 课程数 | `course_name` 去重 | 5 |
 | 选课数 | `student_id + course_name` 唯一组合 | 58 |
+| 学习记录数 | CSV 行数 | 177 |
 | 平均完成率 | 每条选课取 `max(chapters_done) / total_chapters`，再对选课求平均 | 74.3% |
-| 平均测验成绩 | 每条选课取有成绩的最大值，只统计有成绩的选课 | 86.4（有成绩 53 条 / 无成绩 5 条） |
-| 累计学习时长 | `SUM(learning_minutes) / 60` | 165.3 小时（9916 分钟） |
+| 平均测验成绩 | 只统计有成绩的选课（空成绩 ≠ 0 分） | 86.4（53 条有成绩 / 5 条无成绩） |
+| 累计学习时长 | `learning_minutes` 求和 ÷ 60 | 9,916 分钟 / 165.3 小时 |
+| 章节数 | 5 门课 × 6 章 | 30 |
 
-CSV 字段：
+分课程（学习人数 / 记录数 / 完成率 / 平均分）：
 
-```csv
-student_id,course_name,learning_date,learning_minutes,chapters_done,total_chapters,quiz_score
-S003,Python 数据分析,2026-11-04,79,2,8,
-```
+- 生成式 AI 基础：11 / 32 / 81.8 / 87.0
+- 提示词工程入门：16 / 47 / 81.3 / 88.3
+- Python 数据分析：17 / 53 / 55.9 / 81.1
+- Web 前端开发实战：6 / 23 / 76.2 / 86.2
+- AI 安全与负责任使用：8 / 22 / 87.5 / 90.3
 
-- 空成绩表示“未参加测验”，**不是 0 分**。
-- 同一学生同一课程的多条记录视为一条选课，完成进度取 `max(chapters_done)`。
-- 详细计算与边界情况见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+章节到达率由总完成章节数**推断**，UI 明确标注；它不是逐章埋点数据。
 
-## 章节数据（推断口径）
+## 安全
 
-原始 CSV **没有逐章记录**，只有“完成章节总数”。为了让章节页有可展示的数据，本项目使用可解释的推断口径：
+完整安全模型与漏洞报告方式见 [SECURITY.md](SECURITY.md)。要点：
 
-```text
-到达率 = max(chapters_done) ≥ 本章序号 的选课数 ÷ 本课程选课数
-```
-
-假设学生按顺序学习。页面明确标注“推断数据 / 推断值”，**不能当作原始逐章数据**。例如 Python 数据分析第 7、8 章到达率为 0%，说明原始数据中没有人完成到第 7 章。
-
-如果需要精确的逐章数据，应在数据源中增加 `chapter_id` / `chapter_index` 字段，而不是依赖推断。
+- 密码 Argon2id；旧 scrypt 哈希登录成功后透明升级。
+- 会话 token 为随机值，PostgreSQL 只存 SHA-256；Cookie `aip_session` 为 `HttpOnly` + `SameSite=Lax` + 7 天，HTTPS 下自动加 `Secure`。
+- 一次性令牌（验证/重置/MFA challenge）**强制校验过期**（v1 的修复项）。
+- MFA secret 以 AES-256-GCM 加密落库，密钥来自 `MFA_ENC_KEY`；轮换会使现有 MFA 注册失效。
+- CSRF 双提交（`aip_csrf` Cookie + `X-CSRF-Token`），并对带 `Origin` 的写请求做同源校验。
+- Redis 固定窗口限流：公开认证接口每 IP 20 次/10 分钟，账号级敏感接口每用户 10 次/10 分钟；Redis 故障降级为进程内计数。
+- 审计只追加：认证、用户、课程/章节、记录 CRUD、CSV 导入导出、数据重置。
+- 生产模式强制要求 `ADMIN_PASSWORD`、`MFA_ENC_KEY`、`PUBLIC_BASE_URL` 与非 console 邮件传输；启动时缺失即退出。
 
 ## API
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/auth/me` | 当前登录用户（未登录为 `null`） |
-| POST | `/api/auth/register` | 注册；开发模式自动登录，生产模式需邮箱验证 |
-| POST | `/api/auth/login` | 登录（可能返回 `mfaRequired` + 挑战令牌） |
-| POST | `/api/auth/mfa` | 使用挑战令牌 + TOTP/恢复码完成登录 |
-| POST | `/api/auth/verify-email` | 消费验证令牌并建立会话 |
-| POST | `/api/auth/resend-verification` | 重发验证邮件 |
-| POST | `/api/auth/forgot-password` | 发送重置邮件（响应不泄露账号是否存在） |
-| POST | `/api/auth/reset-password` | 消费重置令牌；撤销全部会话 |
-| POST | `/api/auth/change-password` | 已登录用户修改密码（撤销其他会话） |
-| POST | `/api/auth/mfa/setup` / `enable` / `disable` | 账号页 MFA 自助管理 |
-| POST | `/api/auth/logout` | 退出并清除会话 |
-| GET | `/api/admin/users` | 用户列表（管理员） |
-| POST | `/api/admin/users` | 创建用户（管理员） |
-| PATCH | `/api/admin/users/:id` | 角色 / 启停 / 密码 / 解锁 / 重置 MFA / 标记已验证（管理员） |
-| GET | `/api/admin/audit?limit=&offset=&action=` | 审计日志（管理员） |
-| GET | `/api/admin/courses` | 课程与章节详情（管理员） |
-| POST | `/api/admin/courses` | 创建课程（管理员） |
-| PATCH | `/api/admin/courses/:id` | 修改课程信息 / 视频（管理员） |
-| DELETE | `/api/admin/courses/:id?force=1` | 删除课程；有学习记录时需 `force`（管理员） |
-| POST | `/api/admin/courses/:id/chapters` | 新增章节（管理员） |
-| PATCH | `/api/admin/courses/:id/chapters/:idx` | 修改章节（管理员） |
-| DELETE | `/api/admin/courses/:id/chapters/:idx` | 删除章节（管理员） |
-| GET | `/api/meta` | 概览指标、数据集状态、课程列表 |
-| GET | `/api/courses?q=&category=` | 课程列表（含每门课统计） |
-| GET | `/api/courses/:id` | 课程详情、统计、章节到达率 |
-| GET | `/api/chapters/:courseId/:idx` | 章节原文、视频元数据、本章测验、章节统计 |
-| GET | `/api/knowledge/:id` | 知识中心内容 |
-| GET | `/api/dashboard?course=` | KPI、分课程统计、趋势、分布、洞察 |
-| GET | `/api/insights` | 动态洞察、口径公式、常见误区、数据质量 |
-| GET | `/api/records?q=&course=&student=&limit=&offset=` | 学习记录分页（管理员） |
-| POST | `/api/records` | 新增记录（校验后写入） |
-| PATCH | `/api/records/:id` | 修改记录（字段白名单） |
-| DELETE | `/api/records/:id` | 删除记录 |
-| POST | `/api/records/import` | 导入 CSV（JSON `{csv}` 或 `text/csv`），整表替换 |
-| POST | `/api/admin/reset` | 恢复 `data/learning_records.csv` |
-| GET | `/api/export.csv` | 导出当前记录（UTF-8 BOM） |
+- 规范前缀 `/api/v1`；旧 `/api` 别名复用同一 router，仅增加 `Deprecation: true` 与 `Link: <...>; rel="successor-version"`。
+- 会话 Cookie + CSRF、错误封装、分页、全部端点表、审计动作与示例见 [docs/API.md](docs/API.md)。
+- OpenAPI/Scalar 文档为 P1（尚未实现）；`ENABLE_API_DOCS` 为预留开关。
 
-导入校验：课程必须在目录中；日期 `YYYY-MM-DD`；时长 0–1440 分钟；完成章节 ≤ 总章节；成绩 0–100 或留空。非法行会被跳过并返回行号与原因。
+## 项目结构
 
-> 学习记录接口（读、写、导入、导出、重置）均需要管理员会话；公开页面只使用聚合后的看板/课程接口，不暴露逐条记录。
-
-## 配置
-
-| 环境变量 | 默认值 | 作用 |
-|---|---|---|
-| `PORT` | `8787` | 监听端口 |
-| `HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 允许局域网访问 |
-| `TRUST_PROXY` | 生产自动 `1` | 信任 `X-Forwarded-For/Proto`（仅置于可信代理后） |
-| `PORTAL_DB` | `data/portal.db` | 指定 SQLite 数据库文件 |
-| `APP_ENV` | `development` | `production` 时要求邮箱验证、禁止生成/打印管理员密码 |
-| `PUBLIC_BASE_URL` | `http://localhost:8787` | 验证/重置邮件链接的站点地址（生产必填） |
-| `MAIL_WEBHOOK_URL` | 无 | 邮件网关地址（生产必填） |
-| `MAIL_WEBHOOK_TOKEN` | 无 | 邮件网关 Bearer Token |
-| `MAIL_FROM` | `no-reply@...local` | 发件人 |
-| `SEED_DEMO_RECORDS` | 生产 `0` / 开发 `1` | `0` 跳过示例学习记录 |
-| `ADMIN_EMAIL` | `admin@local.test` | 首次创建管理员时使用的邮箱 |
-| `ADMIN_PASSWORD` | 开发自动生成并打印；生产必填 | 首次创建管理员时使用的密码（至少 8 字符） |
-
-管理员只在“没有启用中的管理员”时自动创建；之后请通过管理后台维护账号。
-
-忘记管理员密码、且无法登录后台时，可以用脚本重置（会撤销该账号的所有会话）：
-
-```bash
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='new-strong-password' npm run admin:reset
+```
+.
+├── apps/
+│   ├── api/                 Express 5 API、seed CLI、集成测试
+│   │   └── Dockerfile       Debian slim + 非 root；Argon2 预编译依赖
+│   └── web/                 Vue 3 + Vite SPA
+│       ├── nginx/           容器内 HTTP 静态 + /api 代理
+│       └── Dockerfile       Vite 构建 + nginx:1.27-alpine
+├── packages/
+│   ├── config/              环境变量 zod schema（开发默认/生产校验）
+│   ├── contracts/           请求/响应与审计动作的 zod 契约
+│   ├── content/             讲义、章节、测验、知识文档、常见误区
+│   ├── db/                  Drizzle schema、SQL 迁移、fixtures、迁移 runner
+│   └── domain/              纯函数：analytics/csv/totp/password/dates
+├── deploy/
+│   ├── compose.prod.yml     生产编排（不发布 PG/Redis 端口）
+│   ├── env.example          生产环境模板（占位值）
+│   ├── nginx/               边缘 TLS/HSTS/SPA/限流示例
+│   └── systemd/             systemd 单元
+├── scripts/                 backup.sh / restore.sh / healthcheck.sh
+├── e2e/                     Playwright 冒烟
+├── docs/                    架构、决策、API、部署、演示、就绪度
+├── compose.yml              开发编排（postgres 5433 / redis 6380）
+└── package.json             npm workspaces 脚本
 ```
 
 ## 开发与测试
 
 ```bash
-npm run dev          # node --watch，修改后端代码自动重启
-npm run seed         # 恢复 data/learning_records.csv（清空手工修改）
-npm run backup       # VACUUM INTO 一致性备份到 backups/
-npm run admin:reset  # 重置/创建管理员并撤销其会话
-npm run verify       # 在临时数据库中校验指标、内容、章节、视频资源
-npm test             # 同 verify
+npm run typecheck     # tsc -b（全部 workspace）
+npm run lint          # eslint
+npm run build         # 构建所有 workspace（含 Web 静态产物）
+npm test              # Vitest：单元 + API 集成（需 PG/Redis）
+npm run test:e2e      # Playwright 冒烟
 ```
 
-> `verify` 使用临时数据库，不会修改 `data/portal.db`；`seed` 会重置学习记录（不修改管理员与课程）。
+- 集成测试会自动创建 `ai_portal_test` 并应用迁移/种子，不触碰开发库。
+- 演示数据的完整流程与验收清单见 [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md)。
+- 每次发布前后的检查清单见 [docs/RELEASE_NOTES_v2.0.0.md](docs/RELEASE_NOTES_v2.0.0.md)。
 
-CI 会执行 `npm run verify`、语法检查，并启动服务做一次接口冒烟测试。
+## P1 范围与已知限制
 
-## 替换内容与视频
+v2.0.0 明确延后（不影响核心验收）：
 
-- 课程目录、知识内容、视频配置集中在 `src/content.js`。**首次启动**会导入初始课程/知识/章节；之后数据库是唯一事实来源，后台编辑不会被启动覆盖。
-- 章节原文放在 `data/lectures/*.txt`，仅当对应课程还没有章节时按“第 N 章”标题拆分导入。后台新增/编辑章节直接写入数据库。
-- 课程视频默认使用 `public/assets/course-intro.mp4`（8 秒、960×540、H.264、无音频）。替换 `DEMO_VIDEO` 的 `src` / `poster` / `durationText` 即可。
-- 每个章节页都有视频位，默认共用同一段示例视频（`CHAPTER_VIDEO_DEFAULT`）。需要单独替换某章时，在 `CHAPTER_VIDEOS` 里覆盖，例如：
+- OpenAPI 规范与 Scalar 交互文档（F036）
+- CSV 数据集快照与撤销（F064）
+- 内置 SMTP 传输（当前只有 `webhook` 与开发用 `console`）
+- MinIO/S3 媒体存储（当前媒体为打包静态资源）
+- SQLite → PostgreSQL 导入器（F100，现有真实数据上生产前必须先完成）
+- Playwright 全量矩阵与覆盖率门禁（当前为 CI 冒烟）
 
-```js
-export const CHAPTER_VIDEOS = {
-  'C3-4': { src: '/assets/chapter-c3-4.mp4', poster: '/assets/chapter-c3-4.jpg' }
-};
-```
+同时不在范围内：SSO/OIDC/SAML、SCIM、多租户、资源级权限、审计保留/归档/WORM、Metrics/Tracing APM、强制管理员 MFA、WAL/PITR、CSP nonce。
 
-正式视频建议使用 16:9、H.264 + AAC 的 MP4，单文件尽量小于 5MB。
-
-## 部署
-
-生产部署请使用 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**，其中包含：
-
-- `APP_ENV=production` 必需环境变量（邮件网关、`PUBLIC_BASE_URL`、管理员密码）。
-- Nginx TLS/HSTS/限流示例与 systemd 单元。
-- 版本化 SQLite migration、`npm run backup` 与恢复步骤。
-- 健康检查 `/healthz`、`/readyz`。
-- 单节点限制与何时需要 PostgreSQL/Redis。
-
-快速本机启动：
-
-```bash
-APP_ENV=development npm start
-```
-
-生产环境必须放在 Nginx/Caddy 等反向代理之后启用 HTTPS；应用会根据 `X-Forwarded-Proto: https` 给会话与 CSRF Cookie 加 `Secure`。静态资源与视频由同一进程提供，支持 HTTP Range。
-
-## 安全说明
-
-- **认证**：scrypt 密码哈希、SQLite 会话、HttpOnly + SameSite=Lax Cookie、7 天有效期、按 IP 限流。
-- **邮箱验证 / 密码重置**：一次性令牌（数据库只存哈希）、过期时间；重置后撤销全部旧会话。
-- **MFA**：TOTP + 8 枚一次性恢复码；启用 MFA 时撤销其他密码会话；管理员可重置 MFA。
-- **账号锁定**：按账号统计连续失败，5 次锁定 15 分钟；管理员可解锁。
-- **CSRF**：SameSite + 同源 Origin 校验 + 双提交 Cookie（`aip_csrf` + `X-CSRF-Token`）。
-- **权限**：公开页面只读聚合数据；原始学习记录、CSV 导入/导出、用户/课程管理、审计日志均要求管理员。
-- **审计**：登录、密码、MFA、角色、课程/章节、记录与 CSV 操作写入 `audit_log`，管理后台可查看最近记录。
-- 管理员由环境变量引导创建；生产模式要求显式强密码，不打印生成密码。保护最后一个启用中的管理员。
-- 版本化 migration、`VACUUM INTO` 备份脚本、`/healthz` 与 `/readyz`。
-- 响应头包含 CSP（禁止内联脚本/对象/iframe）、COOP/CORP、`X-Frame-Options`、`nosniff`、`Referrer-Policy`；请求体限制 2MB。
-- 前端所有动态文本经 HTML 转义；视频使用本地资源。
-- **仍未内置**：邮件供应商 SMTP（通过 `MAIL_WEBHOOK_URL` 适配）、PostgreSQL、Redis 会话/限流、审计保留策略、多租户、完整 CSP nonce（当前样式仍需 `unsafe-inline`）。详见 [SECURITY.md](SECURITY.md)。
-
-## 项目结构
-
-```text
-.
-├── server.js                  # HTTP 服务、API 路由、静态文件、Range 请求
-├── src/
-│   ├── db.js                  # SQLite 建表、种子导入、校验、CRUD、CSV 导入
-│   ├── analytics.js           # KPI、分课程统计、图表数据、动态洞察、章节推断
-│   ├── auth.js                # 密码哈希、会话、一次性令牌、管理员引导
-│   ├── migrations.js          # 版本化 SQLite migration
-│   ├── mailer.js              # 邮件 webhook / 开发控制台适配
-│   ├── totp.js                # TOTP、恢复码
-│   ├── content.js             # 课程目录、知识内容、视频配置（初始种子）
-│   └── csv.js                 # 无依赖 CSV 解析 / 导出
-├── public/
-│   ├── index.html
-│   ├── css/styles.css
-│   ├── js/app.js              # 路由、公开页面、登录注册、管理后台、演示面板
-│   ├── js/charts.js           # 纯 SVG 图表
-│   └── assets/                # 示例视频、封面
-├── data/
-│   ├── learning_records.csv   # 模拟学习记录
-│   ├── lectures/              # 5 门课讲义原文
-│   └── portal.db              # 运行时生成（gitignored）
-├── scripts/
-│   ├── seed.js
-│   ├── backup.js
-│   ├── reset-admin.js
-│   └── verify.js
-├── deploy/
-│   ├── nginx.conf.example
-│   └── ai-learning-portal.service
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DEPLOYMENT.md
-│   ├── PRODUCTION_READINESS.md
-│   ├── DEMO_GUIDE.md
-│   └── screenshots/
-└── .github/workflows/ci.yml
-```
-
-## 已知限制
-
-- 最小生产形态为单节点 SQLite：无 PostgreSQL、Redis 会话/限流、多实例水平扩展。
-- 邮件通过 `MAIL_WEBHOOK_URL` 适配外部网关，未内置 SMTP 客户端；需自行配置 SPF/DKIM/DMARC。
-- 审计日志有写入与后台查看，但无保留/归档策略与导出。
-- 无 SSO/SCIM、多租户、细粒度资源权限；MFA 目前为可选，未强制管理员开启。
-- CSP 仍允许 `style-src 'unsafe-inline'`（大量内联样式），尚未改为 nonce/hash。
-- 章节到达率是推断值，原始数据没有逐章记录。
-- 单进程 SQLite，每次请求全量计算 177 条记录；真实数据量需要增量查询与缓存。
-- CSV 导入是整表替换，不支持增量合并。
-- 新建课程没有知识文档；知识中心会显示“暂无知识文档”，需要在代码或数据库中补充。
-- 删除章节保留编号空位，不自动重排（避免与已有测验出处冲突）。
-- 示例课程内容、学生数据与视频均为演示素材，不代表真实教学质量。
-- 浏览器需要较新版本（原生 `<dialog>`、ES Modules、SVG、`<video>`）。
-
-## 贡献
-
-欢迎 Issue 与 PR。提交前请：
-
-1. 运行 `npm run verify`；
-2. 保持零 npm 依赖与零构建；
-3. 新增课程 / 内容时同步更新文档与校验。
-
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+详细风险与完成定义见 [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)。
 
 ## 许可证
 
 [MIT](LICENSE) © 2026 AI Learning Portal contributors
-
-示例课程文本、学生数据与视频均为模拟/占位内容，仅用于演示。

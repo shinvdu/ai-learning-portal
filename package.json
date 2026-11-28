@@ -1,37 +1,41 @@
 {
   "name": "ai-learning-portal",
-  "version": "1.2.0",
-  "description": "A zero-dependency Node.js + SQLite learning portal demo with courses, analytics, auth, and an admin area.",
+  "version": "2.0.0",
+  "private": true,
+  "description": "AI Learning Portal v2 monorepo: Express 5 API, Vue 3 web app, PostgreSQL, Redis.",
   "type": "module",
   "license": "MIT",
-  "author": "AI Learning Portal contributors",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/shinvdu/ai-learning-portal.git"
-  },
-  "bugs": {
-    "url": "https://github.com/shinvdu/ai-learning-portal/issues"
-  },
-  "homepage": "https://github.com/shinvdu/ai-learning-portal#readme",
-  "keywords": [
-    "education",
-    "learning-analytics",
-    "sqlite",
-    "nodejs",
-    "vanilla-js",
-    "svg-charts",
-    "demo"
-  ],
   "engines": {
     "node": ">=24.0.0"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "seed": "node scripts/seed.js",
-    "admin:reset": "node scripts/reset-admin.js",
-    "backup": "node scripts/backup.js",
-    "verify": "node scripts/verify.js",
-    "test": "node scripts/verify.js"
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @portal/api\" \"npm run dev -w @portal/web\"",
+    "predev": "npm run build -w @portal/domain -w @portal/content -w @portal/contracts -w @portal/db -w @portal/config",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "db:generate": "npm run db:generate -w @portal/db",
+    "db:migrate": "npm run db:migrate -w @portal/db",
+    "seed": "npm run seed -w @portal/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
+    "@vitest/coverage-v8": "^5.1.2",
+    "concurrently": "^10.0.7",
+    "eslint": "^10.16.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^5.1.2"
   }
 }
