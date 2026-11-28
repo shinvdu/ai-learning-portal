@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-11-28
 
-P1 增强已在 `next` 分支实现，**尚未发布**；`v2.0.0` 仍是最新发布版本。
+P1 增强已随 v2.1.0 发布。MinIO 实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）与 196 项测试 + 8 项 Playwright E2E 均已通过。
 
 ### Added
 
@@ -16,6 +16,11 @@ P1 增强已在 `next` 分支实现，**尚未发布**；`v2.0.0` 仍是最新�
 - **SMTP 邮件传输（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（`smtp://` 或 `smtps://` 隐式 TLS），通过 nodemailer 发送；`SMTP_URL` 缺失时启动失败，不会静默降级。
 - **媒体存储 local / S3（F094）**：`STORAGE_DRIVER=local|s3`。本地驱动使用 `MEDIA_DIR` 与 `MEDIA_MAX_BYTES`；S3 驱动使用 `S3_*`（MinIO/AWS）。新增公开读取 `GET /api/v1/media/:key`（本地 Range 200/206/416，S3 返回 302 预签名跳转）、`POST /api/v1/admin/media/presign`、`POST /api/v1/admin/media/upload`。开发 compose 新增 `media` profile 运行 MinIO（主机 9000/9001）。
 - **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite` / `scripts/import-sqlite.sh`，支持 `--dry-run`（只校验、不写库）、`--wipe`（先清空导入器负责的表）、`--include-sessions`；只读打开 v1 `data/portal.db`，在单个 PostgreSQL 事务中写入已迁移的目标库。
+
+### Upgrade
+
+- `v2.0.0 → v2.1.0` 无需数据库迁移：`npm ci && npm run build` 后重启 API/Web 即可。
+- 新增 P1 环境变量与 MinIO `media` profile；完整默认值见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
 ### Changed
 

@@ -1,8 +1,8 @@
-# 生产就绪度（v2.0.0）
+# 生产就绪度（v2.1.0）
 
 > 本文评估 AI Learning Portal v2 从“演示 / 受控试点”走向“生产可用”的状态、遗留风险与完成定义。
 >
-> **当前结论**：v2.0.0 的 P0 范围已完成，可作为**单节点或多实例受控生产基线**（PostgreSQL + Redis + Nginx + 备份）。P1 核心项（OpenAPI/Scalar、CSV 快照与恢复、SMTP、local/S3 媒体、SQLite 导入器）已在 `next` 分支实现但**尚未发布**；Playwright 全量矩阵与若干组织级控制仍未完成，**不应在未完成数据导入演练与合规评审的情况下直接作为公网 SaaS**。
+> **当前结论**：v2.1.0 的 P0 与 P1 核心项已发布，可作为**单节点或多实例受控生产基线**（PostgreSQL + Redis + Nginx + 备份）。OpenAPI/Scalar、CSV 快照与恢复、SMTP、local/S3 媒体（MinIO 已实机验收）、SQLite 导入器均已可用；Playwright 全量矩阵与若干组织级控制仍未完成，**不应在未完成数据导入演练与合规评审的情况下直接作为公网 SaaS**。
 
 - 架构与验收基线：[ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)
 - 选型与取舍：[DECISIONS.md](DECISIONS.md)
@@ -58,17 +58,17 @@
 - [x] CI：quality（typecheck/lint/build）、test（PG/Redis + Vitest）、e2e（Playwright 冒烟）。
 - [x] 优雅退出：SIGTERM/SIGINT 停止接收、10 秒排空、关闭 pool/Redis。
 
-## 2. P1：状态（已在 `next` 实现，尚未发布）
+## 2. P1：已发布（v2.1.0）
 
-v2.0.0 发布后，P1 核心项已在 `next` 分支实现（变更见 [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`）：下面的数据路径与运维缺口已补齐，但**这些能力尚未随版本发布**；发布前仍需完成对应验收与发布清单。
+P1 核心项已随 `v2.1.0` 发布并通过验收（变更见 [CHANGELOG.md](../CHANGELOG.md) `[2.1.0]`）；以下为状态与仍需注意的运维限制。
 
 | 项 | 状态 | 影响 / 触发条件 |
 |---|---|---|
-| OpenAPI 规范 + Scalar（F036） | 已实现：`/api/v1/openapi.json` 始终可读，`/api/v1/docs` 生产需 `ENABLE_API_DOCS=1` | 见 [API.md](API.md) §13 |
-| CSV 数据集快照与恢复（F064） | 已实现：导入/重置前自动快照，`/admin/dataset/snapshots`、`/admin/dataset/restore/:id`，管理后台“数据快照”标签 | 误导入可从快照恢复；超大库仍建议物理备份 |
-| 内置 SMTP 传输 | 已实现：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（nodemailer） | 仍无重试队列/退信处理 |
-| MinIO/S3 媒体（F094） | 已实现：`STORAGE_DRIVER=local|s3`，`/api/v1/media/:key` 支持 Range/预签名；开发 compose `media` profile 提供 MinIO | 媒体对象不在 `pg_dump` 中，需单独备份（见 [DEPLOYMENT.md](DEPLOYMENT.md) §13） |
-| SQLite → PostgreSQL 导入器（F100） | 已实现：`npm run import:sqlite`，支持 `--dry-run`/`--wipe`/`--include-sessions` | **有 v1 真实数据时，上生产前必须先完成并核对 golden** |
+| OpenAPI 规范 + Scalar（F036） | 已发布：`/api/v1/openapi.json` 始终可读，`/api/v1/docs` 生产需 `ENABLE_API_DOCS=1` | 见 [API.md](API.md) §13 |
+| CSV 数据集快照与恢复（F064） | 已发布：导入/重置前自动快照，`/admin/dataset/snapshots`、`/admin/dataset/restore/:id`，管理后台“数据快照”标签 | 误导入可从快照恢复；超大库仍建议物理备份 |
+| 内置 SMTP 传输 | 已发布：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（nodemailer） | 仍无重试队列/退信处理 |
+| MinIO/S3 媒体（F094） | 已发布：`STORAGE_DRIVER=local|s3`，`/api/v1/media/:key` 支持 Range/预签名；MinIO RELEASE.2024-12-18 实机验证（预签名 PUT/GET、Range 206、课程视频引用） | 媒体对象不在 `pg_dump` 中，需单独备份（见 [DEPLOYMENT.md](DEPLOYMENT.md) §13） |
+| SQLite → PostgreSQL 导入器（F100） | 已发布：`npm run import:sqlite`，支持 `--dry-run`/`--wipe`/`--include-sessions`；v1 fixture 与临时库导入验收通过 | **有 v1 真实数据时，上生产前必须先完成并核对 golden** |
 | Playwright 全量矩阵/覆盖率门禁 | CI 仅冒烟 | 回归保障依赖手工验收与截图 |
 | WAL/PITR | 未实现 | RPO = 最近一次 `pg_dump` |
 | 审计归档/保留/WORM | 未实现 | 合规场景需外部归档 |
@@ -103,9 +103,9 @@ v2.0.0 发布前必须全部满足：
 4. 备份脚本生成可 `pg_restore --list` 的 dump；恢复演练后 golden 值一致（24/5/58/74.3/86.4/165.3）。
 5. 安全冒烟：匿名 401、学习者 403、CSRF 403、未知 API 404、2MB 413、视频 Range 206、MFA 全流程。
 6. 文档命令逐条可执行；内部链接与路径存在；无硬编码密钥或真实凭据。
-7. 发布清单与回滚步骤见 [RELEASE_NOTES_v2.0.0.md](RELEASE_NOTES_v2.0.0.md)。
+7. 发布清单与回滚步骤见 [RELEASE_NOTES_v2.1.0.md](RELEASE_NOTES_v2.1.0.md)。
 
-未满足以上任一项时，不合并 `next` → `main`、不打 `v2.0.0` 标签。
+未满足以上任一项时，不合并 `next` → `main`、不打 `v2.1.0` 标签。
 
 ## 5. 上线前组织级检查（非代码）
 

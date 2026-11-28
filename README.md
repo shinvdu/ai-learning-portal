@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **版本说明**：`v2.0.0` 是产品级重写（Node.js + PostgreSQL + Redis + Vue 3 构建版），需要 Node ≥ 24 与容器基础设施。`v1.2.0` 标签永久保留为零依赖、SQLite、单文件的**离线教学版**，见 [v1.2.0 离线版](#c-v120-零依赖离线版)。
+> **版本说明**：`v2.1.0` 是当前发布版（v2.0.0 产品级重写 + P1：OpenAPI、数据快照、SMTP、local/S3 媒体、SQLite 导入器），需要 Node ≥ 24 与容器基础设施。`v1.2.0` 标签永久保留为零依赖、SQLite、单文件的**离线教学版**，见 [v1.2.0 离线版](#c-v120-零依赖离线版)。
 >
 > 示例课程、章节、测验与学习记录全部为模拟数据；页面与文档不得包含真实姓名、账号或公司数据。
 
@@ -228,17 +228,19 @@ npm run test:e2e      # Playwright 冒烟
 
 - 集成测试会自动创建 `ai_portal_test` 并应用迁移/种子，不触碰开发库。
 - 演示数据的完整流程与验收清单见 [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md)。
-- 每次发布前后的检查清单见 [docs/RELEASE_NOTES_v2.0.0.md](docs/RELEASE_NOTES_v2.0.0.md)。
+- 每次发布前后的检查清单见 [docs/RELEASE_NOTES_v2.1.0.md](docs/RELEASE_NOTES_v2.1.0.md)。
 
 ## P1 能力与已知限制
 
-以下 P1 能力已在 `next` 分支实现，**尚未发布**（`v2.0.0` 仍是最新发布版本）：
+以下 P1 能力已随 `v2.1.0` 发布：
 
 - **OpenAPI + Scalar（F036）**：`/api/v1/openapi.json` 与 `/api/v1/docs`，见 [API 文档](docs/API.md)。
 - **CSV 快照与恢复（F064）**：导入/重置前自动快照，管理后台“数据快照”标签可恢复，见 [API 文档](docs/API.md)与[部署指南](docs/DEPLOYMENT.md)。
 - **SMTP（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`，见[部署指南](docs/DEPLOYMENT.md)。
 - **媒体 local/S3（F094）**：`STORAGE_DRIVER` + `S3_*`，开发可用 MinIO `media` profile，见[本地开发](docs/DEVELOPMENT.md)。
 - **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite`，先用 `--dry-run`，见[本地开发](docs/DEVELOPMENT.md)。
+
+MinIO 已完成实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）；`v2.0.0 → v2.1.0` 无需数据库迁移。
 
 新增环境变量（完整默认值与生产要求见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 与 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)）：
 

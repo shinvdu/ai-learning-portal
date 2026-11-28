@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#stack)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Version note**: `v2.0.0` is the product-grade rewrite (Node.js + PostgreSQL + Redis + a built Vue 3 app) and requires Node ≥ 24 plus container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
+> **Version note**: `v2.1.0` is the current release (the v2.0.0 product-grade rewrite plus P1: OpenAPI, data snapshots, SMTP, local/S3 media, and the SQLite importer) and requires Node ≥ 24 plus container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
 >
 > All courses, chapters, quizzes and learning records are simulated. Pages and documents must not contain real names, accounts or company data.
 
@@ -226,17 +226,19 @@ npm run test:e2e      # Playwright smoke
 
 - Integration tests create `ai_portal_test`, apply migrations and seed it; the development database is untouched.
 - End-to-end demo steps and the acceptance checklist are in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
-- Pre/post-release checklist: [docs/RELEASE_NOTES_v2.0.0.md](docs/RELEASE_NOTES_v2.0.0.md).
+- Pre/post-release checklist: [docs/RELEASE_NOTES_v2.1.0.md](docs/RELEASE_NOTES_v2.1.0.md).
 
 ## P1 capabilities and known limitations
 
-The following P1 capabilities are implemented on the `next` branch and **not yet released** (`v2.0.0` is still the latest release):
+The following P1 capabilities are released in `v2.1.0`:
 
 - **OpenAPI + Scalar (F036)**: `/api/v1/openapi.json` and `/api/v1/docs`, see [API docs](docs/API.md).
 - **CSV snapshots and restore (F064)**: automatic snapshot before import/reset; the admin "data snapshots" tab restores any snapshot. See [API docs](docs/API.md) and [deployment](docs/DEPLOYMENT.md).
 - **SMTP (F049 extension)**: `MAIL_TRANSPORT=smtp` + `SMTP_URL`, see [deployment](docs/DEPLOYMENT.md).
 - **Local/S3 media (F094)**: `STORAGE_DRIVER` + `S3_*`; MinIO is available through the dev `media` profile, see [local development](docs/DEVELOPMENT.md).
 - **SQLite → PostgreSQL importer (F100)**: `npm run import:sqlite`; start with `--dry-run`, see [local development](docs/DEVELOPMENT.md).
+
+MinIO has been verified live (RELEASE.2024-12-18: presigned PUT/GET + Range 206 + course video reference); `v2.0.0 → v2.1.0` needs no database migration.
 
 New environment variables (full defaults and production requirements in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)):
 

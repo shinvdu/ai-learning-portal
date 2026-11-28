@@ -79,7 +79,7 @@ describe('OpenAPI document', () => {
     expect(document.openapi).toBe('3.1.0');
     const info = document.info as Json;
     expect(info.title).toBe('AI Learning Portal API');
-    expect(info.version).toBe('2.0.0');
+    expect(info.version).toBe('2.1.0');
     expect(typeof info.description).toBe('string');
     expect(document.servers).toEqual([
       { url: 'https://portal.example.com', description: '当前部署' },

@@ -92,7 +92,7 @@ import {
 } from './users.js';
 
 /** Keep in sync with the published workspace version. */
-export const OPENAPI_INFO_VERSION = '2.0.0';
+export const OPENAPI_INFO_VERSION = '2.1.0';
 
 /**
  * Stable tag names. Tags are part of the published contract: renaming one is a

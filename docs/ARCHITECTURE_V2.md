@@ -1,7 +1,7 @@
-# AI Learning Portal v2.0.0 目标架构与重构方案
+# AI Learning Portal v2 目标架构与重构方案
 
-> 状态：已批准，待实施  
-> 分支：`next`（`main` 与 `v1.2.0` tag 保持为零依赖离线教学版）  
+> 状态：已实施；`v2.0.0` 与 `v2.1.0`（P1 增强）均已发布  
+> 发布：`main` 当前 `v2.1.0`；`v1.2.0` tag 保留为零依赖离线教学版  
 > 更新日期：2026-11-28  
 > 本文是 v2 重构的**唯一总文档**；功能级细节见 `docs/features/`，进度与链接见 `docs/FEATURE_TRACKER.xlsx`。
 

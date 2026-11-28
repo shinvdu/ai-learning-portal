@@ -1,6 +1,6 @@
 {
   "name": "@portal/content",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -14,7 +14,10 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "lectures"],
+  "files": [
+    "dist",
+    "lectures"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty"

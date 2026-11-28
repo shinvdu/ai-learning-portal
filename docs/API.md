@@ -1,4 +1,4 @@
-# API 参考（v2.0.0）
+# API 参考（v2.1.0）
 
 本文描述 AI Learning Portal v2 的 HTTP API。规范前缀为 **`/api/v1`**；旧前缀 **`/api`** 复用同一套 router，并在响应中追加：
 
