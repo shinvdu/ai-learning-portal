@@ -1,4 +1,4 @@
-# 部署指南（v2.0.0）
+# 部署指南（v2.1.0）
 
 本文覆盖 v2 的三种交付形态：
 
@@ -47,6 +47,7 @@
 | `STORAGE_DRIVER` | `local` | `local`（API 卷上的 `MEDIA_DIR`）或 `s3`（S3/MinIO，多实例共享） |
 | `MEDIA_DIR` | `./data/media` | 本地媒体目录；生产需在持久卷上并可写 |
 | `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（约 50 MB） |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | 仅 dev compose | 由 compose 的 `minio` 服务消费（API 不读）；允许浏览器预签名直传的源，逗号分隔。使用外部 MinIO 时在该服务侧配置；若上传经 API 代理可留空 |
 | `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | s3 时必填 | 存储桶与凭据；凭据只在服务端使用，不下发前端 |
 | `S3_ENDPOINT` | MinIO 必填 | 如 `http://minio:9000`（容器内）或 `http://127.0.0.1:9000`；AWS 可省略 |
 | `S3_REGION` | `us-east-1` | S3 区域 |
@@ -115,7 +116,8 @@ sudo editor /etc/nginx/conf.d/portal.conf
 - HTTP :80 → HTTPS 301；`/.well-known/acme-challenge/` 保留给证书续期。
 - TLS 1.2/1.3、HSTS 1 年、`X-Content-Type-Options`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、CSP、COOP/CORP。
 - 静态：`/assets/` 一年 immutable；`/index.html` 与 SPA fallback 为 no-cache；深链刷新返回 `index.html`。
-- `/api/` 反代并做边缘限流（认证 20 r/m，其他 600 r/m）；请求体 3m（应用自身仍限 2MB 并返回标准 413）。
+- `/api/` 反代并做边缘限流（认证 20 r/m，其他 600 r/m）；请求体 **64m**（为 50 MB 媒体直传留余量；应用自身仍限 2 MB JSON 与 `MEDIA_MAX_BYTES` 原始体并返回标准 413）。
+- CSP 需包含 `media-src 'self' blob:` 与 `img-src 'self' data: blob:`（上传前 blob 预览）；示例 `deploy/nginx/portal.conf.example` 已同步。不要为对象存储额外放开外站源——视频字段保存的是同源 `/api/v1/media/<key>`。
 - `/healthz`、`/readyz` 仅允许回环/内网。
 - 容器网络部署时，把示例中的 `127.0.0.1:8787` 改为 `api:8787`，并把 `root /var/www/ai-learning-portal` 改为反代 `web:80`（或挂载共享静态目录）。
 - 确保 `PUBLIC_BASE_URL=https://<域名>`，并在代理设置 `X-Forwarded-Proto https`。
@@ -132,9 +134,10 @@ set -a; . ./.env; set +a
 npm run db:migrate
 ```
 
-- 迁移文件位于 `packages/db/drizzle/`（当前基线 `0001_initial.sql`），journal 记录在 `drizzle.__drizzle_migrations`。
+- 迁移文件位于 `packages/db/drizzle/`（`0001_initial.sql` + `0002_chapter_video.sql`），journal 记录在 `drizzle.__drizzle_migrations`。
+- **v2.0.0 → v2.1.0 需要迁移**：`0002_chapter_video.sql` 为 `chapters` 增加 `video_mode`（默认 `inherit`）与 `video` jsonb 及 CHECK 约束。升级、全新部署与导入 v1 数据前都必须先迁移。
 - `/readyz` 会核对 journal 条目数，未迁移到最新时返回 503。
-- 迁移脚本不提供自动回滚；回滚请使用备份恢复（见第 6 节）或代码回退到上一版本后人工处理。
+- 迁移脚本不提供自动回滚；回滚请使用备份恢复（见第 6 节）或代码回退到上一版本后人工处理。`0002` 仅新增列，应用回退到 v2.0.0 时多出的列会被忽略。
 
 ## 6. 备份与恢复
 
@@ -226,7 +229,7 @@ upstream portal_api_upstream {
 
 ```bash
 git fetch --tags
-git checkout v2.0.0        # 或更新的补丁 tag
+git checkout v2.1.0        # 或更新的补丁 tag
 export POSTGRES_PASSWORD='...'
 docker compose -p portalprod -f deploy/compose.prod.yml build
 ./scripts/backup.sh        # 先备份
@@ -234,7 +237,9 @@ docker compose -p portalprod -f deploy/compose.prod.yml up -d
 ./scripts/healthcheck.sh http://127.0.0.1:8787
 ```
 
-- `migrate` 会先于 API 运行；迁移是向前兼容的基线，不自动回滚。
+- `migrate` 会先于 API 运行并应用 `0002_chapter_video.sql`；迁移是向前兼容的基线，不自动回滚。
+- 非 compose 部署务必在重启 API 前手工执行 `npm run db:migrate`（或 `node packages/db/dist/migrate.js`），否则 `/readyz` 返回 503 且章节查询会因缺列失败。
+- `0002` 只新增可空/有默认值的列，回滚应用到 v2.0.0 不需要删列；但迁移 journal 会保留记录。
 
 回滚到 v1.2.0（零依赖离线版）：
 
@@ -291,12 +296,13 @@ SMTP_URL='smtps://no-reply%40example.com:app-password@smtp.example.com:465'
 
 ## 12. P1 状态
 
-已在 `next` 分支实现、尚未发布（详见 [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`）：
+将随 `v2.1.0` 发布（当前 `next`，待最终 tag；详见 [CHANGELOG.md](../CHANGELOG.md) `[2.1.0]`）：
 
 - OpenAPI 3.1 + Scalar（见 §14）。
 - CSV 数据集快照与恢复（见 [API.md](API.md) §8）。
 - SMTP 传输（见 §10.2）。
-- local/S3（MinIO）媒体存储（见 §13）。
+- local/S3（MinIO）媒体存储与管理端上传 UI（见 §13）。
+- 章节独立视频（迁移 `0002_chapter_video.sql`，见 §5）。
 - SQLite → PostgreSQL 导入器（见 §15）。
 
 仍不在范围：
@@ -308,6 +314,8 @@ SMTP_URL='smtps://no-reply%40example.com:app-password@smtp.example.com:465'
 ## 13. 媒体存储（local / S3 / MinIO）
 
 `STORAGE_DRIVER=local` 为默认：文件保存在 API 可写的 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 HTTP Range。`STORAGE_DRIVER=s3` 对接 S3/MinIO：应用签发短时预签名 URL（900 秒），浏览器 302 跳转或直传，凭据不进入前端。
+
+管理端上传（F095）：课程/章节表单内可选择视频与封面文件。`local` 驱动把原始字节 POST 到 `POST /api/v1/admin/media/upload`（同源、带 CSRF，受 `MEDIA_MAX_BYTES` 限制）；`s3` 驱动由浏览器直接 PUT 预签名 URL，需要对象存储允许站点源的 CORS。表单保存的是稳定站内路径 `/api/v1/media/<key>`（响应字段 `path`），不是绝对/会过期的 `publicUrl`。Nginx 上传体上限已提高到 64m，CSP 允许 `media-src 'self' blob:`。
 
 ```bash
 # 本地驱动（默认）
@@ -334,10 +342,11 @@ docker compose --profile media up -d minio minio-init
 ```
 
 - 端口 9000/9001 若被占用，可在 compose 覆盖里改端口映射（如 `9010:9000`、`9011:9001`），并同步改 `S3_ENDPOINT`。
+- 浏览器直传需 CORS：开发 compose 的 MinIO 读取 `MINIO_API_CORS_ALLOW_ORIGIN`（默认 `http://127.0.0.1:5173,http://localhost:5173`）。生产使用外部 MinIO 时，在其服务端配置对应的站点源；AWS S3 需配置桶 CORS。缺少 CORS 时上传会在预检失败，上传器会提示检查对象存储 CORS。
 - `MEDIA_DIR` 必须位于持久卷；容器重建不会保留未挂载的本地媒体。S3 多实例共享同一桶。
 - 多实例部署使用 `s3`，否则各实例只看到自己的本地磁盘。
 - **备份策略不变**：`pg_dump` 只覆盖数据库；本地 `MEDIA_DIR` 与 S3 桶需单独备份/开启版本化。数据库恢复后，媒体对象可能需从对象存储或文件备份恢复。
-- 把课程视频指向对象：上传后把课程视频设为 `custom`，`src=/api/v1/media/<key>`（详见 [API.md](API.md) §8 媒体）。
+- 把课程/章节视频指向对象：上传后把视频设为 `custom`，`src=/api/v1/media/<key>`（详见 [API.md](API.md) §8 媒体）。
 
 ## 14. OpenAPI 与 Scalar 文档
 

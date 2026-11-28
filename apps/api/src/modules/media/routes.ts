@@ -3,10 +3,16 @@
  * `/api/v1` (and therefore `/api` through the legacy alias):
  *
  * - `POST /admin/media/presign` (admin) `{filename,contentType}` →
- *   `{key,uploadUrl,publicUrl,expiresIn}`. S3 returns a presigned PUT; local
- *   returns the admin upload endpoint so the client can POST raw bytes there.
+ *   `{key,uploadUrl,publicUrl,expiresIn,driver,path}`. S3 returns a presigned
+ *   PUT; local returns the admin upload endpoint so the client can POST raw
+ *   bytes there.
  * - `POST /admin/media/upload` (admin, raw body, `MEDIA_MAX_BYTES` cap) →
- *   `{key,url}`. Local only; S3 rejects with a pointer to presign.
+ *   `{key,url,driver:'local',path}`. Local only; S3 rejects with a pointer to
+ *   presign.
+ *
+ * `path` is the permanent site-local URL (`/api/v1/media/<key>`) that course
+ * and chapter video fields must persist; `publicUrl`/`url` may be absolute and
+ * (for S3 presigned GETs) expire.
  * - `GET /media/:key` (public) → local stream with single-range 206/416, or a
  *   302 redirect to a presigned S3 GET.
  *
@@ -51,6 +57,11 @@ function joinUrl(base: string, pathname: string): string {
 
 function apiUrl(env: Env, pathname: string): string {
   return joinUrl(env.PUBLIC_BASE_URL, `${API_PREFIX}${pathname}`);
+}
+
+/** Permanent site-local media path (never absolute, never expiring). */
+function mediaPath(key: string): string {
+  return `${API_PREFIX}/media/${key}`;
 }
 
 function firstString(value: unknown): string {
@@ -163,7 +174,14 @@ export function createMediaRouter(options: MediaRouterOptions = {}): Router {
           : `${apiUrl(env, '/admin/media/upload')}?key=${encodeURIComponent(key)}`;
 
       const publicUrl = await storage.publicUrl(key, expiresIn);
-      res.json({ key, uploadUrl, publicUrl, expiresIn });
+      res.json({
+        key,
+        uploadUrl,
+        publicUrl,
+        expiresIn,
+        driver: storage.driver,
+        path: mediaPath(key),
+      });
     },
   );
 
@@ -200,7 +218,7 @@ export function createMediaRouter(options: MediaRouterOptions = {}): Router {
         .slice(0, 200);
       await storage.put(key, body, contentType || 'application/octet-stream');
       const url = await storage.publicUrl(key, MEDIA_PRESIGN_EXPIRES_IN);
-      res.status(201).json({ key, url });
+      res.status(201).json({ key, url, driver: 'local', path: mediaPath(key) });
     },
   );
 

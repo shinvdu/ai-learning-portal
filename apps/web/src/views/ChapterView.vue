@@ -78,9 +78,18 @@ const dashboardTo = computed(() => ({
 const chapterLink = (idx: number): string => `${courseLink.value}/chapters/${idx}`;
 const videoLabel = computed(() =>
   course.value && chapter.value
-    ? `${course.value.name} 第 ${chapter.value.idx} 章示例视频`
-    : '章节示例视频',
+    ? `${course.value.name} 第 ${chapter.value.idx} 章视频`
+    : '章节视频',
 );
+
+/** Ignore the API's generic default note so custom chapter videos aren't
+ * mislabelled as the shared demo clip. */
+const chapterVideoNote = computed(() => {
+  const video = chapter.value?.video;
+  if (!video) return '本章暂无视频。';
+  const note = video.note?.trim();
+  return note && note !== '示例视频，可在后台替换。' ? note : '本章视频。';
+});
 
 function scoreDetail(value: number | null, count: number): string {
   if (value === null || value === undefined) return '—（无成绩）';
@@ -134,19 +143,26 @@ function scoreDetail(value: number | null, count: number): string {
         <section class="panel" aria-labelledby="chapterVideoTitle">
           <div class="panel-head">
             <div>
-              <h2 id="chapterVideoTitle">本章示例视频</h2>
-              <p class="panel-sub">{{ chapter.video.note }}</p>
+              <h2 id="chapterVideoTitle">本章视频</h2>
+              <p class="panel-sub">{{ chapterVideoNote }}</p>
             </div>
-            <span class="tag tag-video-light">统一示例</span>
+            <span v-if="chapter.video" class="tag tag-video-light">本章视频</span>
           </div>
-          <VideoPlayer
-            class="chapter-video-frame"
-            :video="chapter.video"
-            :label="videoLabel"
+
+          <template v-if="chapter.video">
+            <VideoPlayer
+              class="chapter-video-frame"
+              :video="chapter.video"
+              :label="videoLabel"
+            />
+            <p class="video-caption">时长 {{ videoDuration(chapter.video) }} · 第 {{ chapter.idx }} 章视频。</p>
+          </template>
+
+          <EmptyState
+            v-else
+            title="本章暂无视频"
+            message="授课老师尚未为本章配置视频，可先阅读讲义原文或完成本章小测验。"
           />
-          <p class="video-caption">
-            时长 {{ videoDuration(chapter.video) }} · 无音频 · 所有章节共用同一片段，正式课程可按章节替换。
-          </p>
         </section>
 
         <section class="panel" aria-labelledby="lectureTitle">

@@ -4,7 +4,18 @@
  * Paths are relative to `/api/v1` (see `client.ts`). Read the API route files
  * under `apps/api/src/modules/*\/routes.ts` before changing a shape here.
  */
-import { apiRequest, apiRequestBlob, withQuery } from './client';
+import {
+  API_BASE,
+  ApiError,
+  CSRF_HEADER,
+  apiRequest,
+  apiRequestBlob,
+  readCsrfToken,
+  refreshCsrf,
+  uploadBinary,
+  withQuery,
+  type UploadProgress,
+} from './client';
 import type {
   AdminCoursesResponse,
   AdminUser,
@@ -31,6 +42,9 @@ import type {
   KnowledgeResponse,
   LoginInput,
   LoginResponse,
+  MediaPresignInput,
+  MediaPresignResponse,
+  MediaUploadResponse,
   MfaBody,
   MfaEnableResponse,
   MfaResponse,
@@ -266,6 +280,67 @@ export const adminApi = {
     list(query: AuditQuery = {}): Promise<AuditResponse> {
       return apiRequest(withQuery('/admin/audit', query));
     },
+  },
+};
+
+/* ----------------------------------- media ---------------------------------- */
+
+export type UploadLocalOptions = {
+  /** Key returned by `mediaApi.presign`. */
+  key: string;
+  filename: string;
+  file: Blob;
+  /** Must match the presigned contentType; defaults to `file.type`. */
+  contentType?: string;
+  onProgress?: (progress: UploadProgress) => void;
+  signal?: AbortSignal;
+};
+
+export const mediaApi = {
+  /** Admin: allocate a media key and an upload target (local or S3 PUT). */
+  presign(input: MediaPresignInput): Promise<MediaPresignResponse> {
+    return apiRequest('/admin/media/presign', { method: 'POST', body: input });
+  },
+
+  /**
+   * Local driver: POST the raw file bytes to the same-origin admin endpoint.
+   * The presigned `uploadUrl` is absolute, but using the API base keeps the
+   * session cookie and the double-submit CSRF token on the request.
+   */
+  async uploadLocal(options: UploadLocalOptions): Promise<MediaUploadResponse> {
+    const contentType = options.contentType || options.file.type || 'application/octet-stream';
+    const path =
+      `${API_BASE}/admin/media/upload?key=${enc(options.key)}` +
+      `&filename=${enc(options.filename)}`;
+
+    const send = (token: string): Promise<MediaUploadResponse> => {
+      const headers: Record<string, string> = { 'Content-Type': contentType };
+      if (token) headers[CSRF_HEADER] = token;
+      return uploadBinary<MediaUploadResponse>(path, options.file, {
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        onProgress: options.onProgress,
+        signal: options.signal,
+      });
+    };
+
+    const token = readCsrfToken() || (await refreshCsrf());
+    try {
+      return await send(token);
+    } catch (error) {
+      // A rotated/absent CSRF cookie returns 403; refresh once and replay.
+      if (error instanceof ApiError && error.status === 403 && !options.signal?.aborted) {
+        const fresh = await refreshCsrf();
+        if (fresh && fresh !== token) return send(fresh);
+      }
+      throw error;
+    }
+  },
+
+  /** Permanent site-local path stored in course/chapter `video.path`. */
+  mediaPath(key: string): string {
+    return `${API_BASE}/media/${key}`;
   },
 };
 

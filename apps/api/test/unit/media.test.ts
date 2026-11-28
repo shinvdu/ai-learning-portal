@@ -95,6 +95,8 @@ describe('local media driver', () => {
     const key = String(upload.body.key);
     expect(key).toMatch(MEDIA_KEY_PATTERN);
     expect(upload.body.url).toBe(`http://portal.test/api/v1/media/${key}`);
+    expect(upload.body.driver).toBe('local');
+    expect(upload.body.path).toBe(`/api/v1/media/${key}`);
 
     const served = await request(app).get(`/media/${key}`);
     expect(served.status).toBe(200);
@@ -163,6 +165,8 @@ describe('local media driver', () => {
     );
     expect(presign.body.publicUrl).toBe(`http://portal.test/api/v1/media/${key}`);
     expect(presign.body.expiresIn).toBe(MEDIA_PRESIGN_EXPIRES_IN);
+    expect(presign.body.driver).toBe('local');
+    expect(presign.body.path).toBe(`/api/v1/media/${key}`);
 
     const uploaded = await request(app)
       .post(`/admin/media/upload?key=${encodeURIComponent(key)}`)
@@ -259,6 +263,9 @@ describe('s3 media driver', () => {
     expect(presign.body.uploadUrl).toBe(`https://signed.example/put?key=${key}`);
     expect(presign.body.publicUrl).toBe(`https://cdn.example.com/media/${key}`);
     expect(presign.body.expiresIn).toBe(MEDIA_PRESIGN_EXPIRES_IN);
+    expect(presign.body.driver).toBe('s3');
+    // The site-local path is stable even when publicUrl is an external CDN.
+    expect(presign.body.path).toBe(`/api/v1/media/${key}`);
 
     expect(calls).toHaveLength(1);
     const put = calls[0]!.command;

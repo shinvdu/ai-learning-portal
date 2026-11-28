@@ -15,6 +15,16 @@ export const API_BASE = '/api/v1';
 export const CSRF_COOKIE_NAME = 'aip_csrf';
 export const CSRF_HEADER = 'X-CSRF-Token';
 
+/**
+ * Client-side mirror of the API `MEDIA_MAX_BYTES` default (50MB). The server
+ * remains authoritative; this only avoids a doomed upload over slow links.
+ * Override at build time with `VITE_MEDIA_MAX_BYTES` when the API is tuned.
+ */
+export const MEDIA_MAX_BYTES = (() => {
+  const raw = Number(import.meta.env?.VITE_MEDIA_MAX_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : 50 * 1024 * 1024;
+})();
+
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export class ApiError extends Error {
@@ -85,13 +95,17 @@ export function errorMessage(error: unknown, fallback = '操作失败，请稍�
 
 export type RequestOptions = {
   method?: string;
-  /** JSON-serialisable value, a raw string, or FormData. */
+  /** JSON-serialisable value, a raw string, FormData, or binary body. */
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Defaults to `same-origin`; use `omit` for cross-origin presigned PUTs. */
+  credentials?: RequestCredentials;
   /** Do not dispatch the global `auth:unauthorized` event on 401. */
   suppressAuthEvent?: boolean;
 };
+
+export type BinaryBody = Blob | ArrayBuffer | ArrayBufferView;
 
 export type QueryValue = string | number | boolean | null | undefined;
 
@@ -109,6 +123,15 @@ export function withQuery(path: string, query?: Record<string, QueryValue>): str
 
 function isFormData(value: unknown): value is FormData {
   return typeof FormData !== 'undefined' && value instanceof FormData;
+}
+
+/** Blob covers File; ArrayBufferView covers typed arrays and DataView. */
+function isBinaryBody(value: unknown): value is BinaryBody {
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return true;
+  if (typeof value === 'object' && value !== null && typeof ArrayBuffer !== 'undefined') {
+    return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+  }
+  return false;
 }
 
 function normaliseUrl(path: string): string {
@@ -147,13 +170,17 @@ async function perform(
 
   let init: RequestInit = {
     method,
-    credentials: 'same-origin',
+    credentials: options.credentials ?? 'same-origin',
     headers,
     signal: options.signal,
   };
 
   if (options.body !== undefined) {
-    if (isFormData(options.body)) {
+    if (isBinaryBody(options.body)) {
+      // Raw uploads: the caller sets Content-Type explicitly (Blob.type is
+      // ignored by fetch when the body is a plain Blob/ArrayBuffer).
+      init.body = options.body as BodyInit;
+    } else if (isFormData(options.body)) {
       init.body = options.body;
     } else if (typeof options.body === 'string') {
       init.body = options.body;
@@ -217,6 +244,126 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const response = await perform(path, options);
   const payload = await parseBody(response);
   return payload as T;
+}
+
+/* -------------------------------- uploads -------------------------------- */
+
+export type UploadProgress = {
+  loaded: number;
+  total: number;
+  /** 0–100, or `null` when the server does not report a total length. */
+  percent: number | null;
+};
+
+export type UploadBinaryOptions = {
+  /** Defaults to `PUT` (presigned S3/MinIO). Local uploads use `POST`. */
+  method?: string;
+  headers?: Record<string, string>;
+  /** Defaults to `same-origin`; presigned S3 PUTs must use `omit`. */
+  credentials?: RequestCredentials;
+  onProgress?: (progress: UploadProgress) => void;
+  signal?: AbortSignal;
+};
+
+function parseUploadPayload(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * XHR-backed binary upload with progress. `fetch` cannot report upload
+ * progress, so media files use this instead. Resolves with the parsed JSON
+ * success body (or `null` for an empty 2xx response such as S3 PUT).
+ */
+export function uploadBinary<T = unknown>(
+  url: string,
+  body: BinaryBody,
+  options: UploadBinaryOptions = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (typeof XMLHttpRequest === 'undefined') {
+      reject(new ApiError(0, null, '当前浏览器不支持上传'));
+      return;
+    }
+
+    const method = (options.method ?? 'PUT').toUpperCase();
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, normaliseUrl(url), true);
+    xhr.withCredentials =
+      options.credentials === undefined ||
+      options.credentials === 'same-origin' ||
+      options.credentials === 'include';
+
+    for (const [name, value] of Object.entries(options.headers ?? {})) {
+      try {
+        xhr.setRequestHeader(name, value);
+      } catch {
+        // Browsers reject a few forbidden header names; ignore those.
+      }
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (!options.onProgress) return;
+      const total = event.lengthComputable ? event.total : 0;
+      const percent = total > 0 ? Math.min(100, Math.round((event.loaded / total) * 100)) : null;
+      options.onProgress({ loaded: event.loaded, total, percent });
+    };
+
+    const abort = (): void => {
+      xhr.abort();
+    };
+    if (options.signal) {
+      if (options.signal.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+        return;
+      }
+      options.signal.addEventListener('abort', abort, { once: true });
+    }
+
+    const cleanup = (): void => {
+      if (options.signal) options.signal.removeEventListener('abort', abort);
+    };
+
+    xhr.onload = () => {
+      cleanup();
+      const payload = parseUploadPayload(xhr.responseText);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload as T);
+        return;
+      }
+      const errorPayload =
+        typeof payload === 'string' ? payload : (payload as ApiErrorPayload | null);
+      reject(
+        new ApiError(
+          xhr.status,
+          errorPayload,
+          messageFromPayload(errorPayload, xhr.status),
+        ),
+      );
+    };
+
+    xhr.onerror = () => {
+      cleanup();
+      reject(
+        new ApiError(
+          0,
+          null,
+          '上传失败：无法连接到存储服务，请检查网络或对象存储 CORS 配置',
+        ),
+      );
+    };
+
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+
+    xhr.send(body as XMLHttpRequestBodyInit);
+  });
 }
 
 /** Raw request for downloads; the caller owns the body stream. */

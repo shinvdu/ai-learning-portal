@@ -842,6 +842,172 @@ describe('admin data operations', () => {
     expect(nonePublic.body.course.video).toBeNull();
   });
 
+  it('applies chapter video custom / inherit / none and exposes raw mode in chapterDetails', async () => {
+    const adminCookie = await adminLogin();
+    const course = await createCourse(adminCookie, {
+      name: '章节视频课程',
+      video_mode: 'inherit',
+    });
+
+    // Create-time default is `inherit`.
+    const inherited = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/courses/${course.id}/chapters`,
+    )
+      .send({ title: '默认章节', body: '正文' })
+      .expect(201);
+    expect(inherited.body.chapter).toMatchObject({ idx: 1, video_mode: 'inherit', video: null });
+    const inheritedPublic = await request(app).get(v1(`/chapters/${course.id}/1`)).expect(200);
+    expect(inheritedPublic.body.chapter.video.src).toBe(DEMO_VIDEO.src);
+
+    // custom payload (site-local media path) wins over the course video.
+    const custom = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/courses/${course.id}/chapters`,
+    )
+      .send({
+        title: '自定义视频章节',
+        body: '正文',
+        video_mode: 'custom',
+        video: { src: '/api/v1/media/chapter-clip.mp4', poster: '' },
+      })
+      .expect(201);
+    expect(custom.body.chapter.video_mode).toBe('custom');
+    expect(custom.body.chapter.video.src).toBe('/api/v1/media/chapter-clip.mp4');
+
+    const customPublic = await request(app).get(v1(`/chapters/${course.id}/2`)).expect(200);
+    expect(customPublic.body.chapter.video.src).toBe('/api/v1/media/chapter-clip.mp4');
+    // The course video is still resolved separately.
+    expect(customPublic.body.course.video.src).toBe(DEMO_VIDEO.src);
+
+    // inherit falls back to the resolved course custom video.
+    await adminRequest(adminCookie, 'patch', `/admin/courses/${course.id}`)
+      .send({ video_mode: 'custom', video: { src: '/assets/demo.mp4', poster: '' } })
+      .expect(200);
+    const inheritCustomPublic = await request(app).get(v1(`/chapters/${course.id}/1`)).expect(200);
+    expect(inheritCustomPublic.body.chapter.video.src).toBe('/assets/demo.mp4');
+
+    // none clears the chapter video even though the course has one.
+    await adminRequest(adminCookie, 'patch', `/admin/courses/${course.id}/chapters/1`)
+      .send({ video_mode: 'none' })
+      .expect(200);
+    const nonePublic = await request(app).get(v1(`/chapters/${course.id}/1`)).expect(200);
+    expect(nonePublic.body.chapter.video).toBeNull();
+    expect(nonePublic.body.course.video.src).toBe('/assets/demo.mp4');
+
+    // inherit + course none yields null.
+    await adminRequest(adminCookie, 'patch', `/admin/courses/${course.id}`)
+      .send({ video_mode: 'none' })
+      .expect(200);
+    await adminRequest(adminCookie, 'patch', `/admin/courses/${course.id}/chapters/1`)
+      .send({ video_mode: 'inherit' })
+      .expect(200);
+    const courseNone = await request(app).get(v1(`/chapters/${course.id}/1`)).expect(200);
+    expect(courseNone.body.course.video).toBeNull();
+    expect(courseNone.body.chapter.video).toBeNull();
+
+    // Admin chapterDetails carry the raw three-state fields for editing.
+    const list = await adminRequest(adminCookie, 'get', '/admin/courses').expect(200);
+    const row = (
+      list.body.courses as {
+        id: string;
+        chapterDetails: { idx: number; video_mode: string; video: { src: string } | null }[];
+      }[]
+    ).find((entry) => entry.id === course.id);
+    expect(row?.chapterDetails).toHaveLength(2);
+    expect(row?.chapterDetails[0]).toMatchObject({ idx: 1, video_mode: 'inherit', video: null });
+    expect(row?.chapterDetails[1]).toMatchObject({
+      idx: 2,
+      video_mode: 'custom',
+      video: { src: '/api/v1/media/chapter-clip.mp4' },
+    });
+  });
+
+  it('rejects external and traversal chapter video paths', async () => {
+    const adminCookie = await adminLogin();
+    const course = await createCourse(adminCookie, { name: '章节视频校验课程' });
+
+    for (const src of ['https://evil.example/clip.mp4', '//evil.example/clip.mp4', '../clip.mp4']) {
+      const res = await adminRequest(
+        adminCookie,
+        'post',
+        `/admin/courses/${course.id}/chapters`,
+      )
+        .send({ title: '坏视频章节', body: '正文', video_mode: 'custom', video: { src } })
+        .expect(400);
+      expect(res.body.errors).toContain('视频与封面必须使用站内路径（以 / 开头）');
+    }
+
+    const chapter = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/courses/${course.id}/chapters`,
+    )
+      .send({ title: '正常章节', body: '正文' })
+      .expect(201);
+    const badPatch = await adminRequest(
+      adminCookie,
+      'patch',
+      `/admin/courses/${course.id}/chapters/${chapter.body.chapter.idx}`,
+    )
+      .send({ video_mode: 'custom', video: { src: 'https://evil.example/clip.mp4' } })
+      .expect(400);
+    expect(badPatch.body.errors).toContain('视频与封面必须使用站内路径（以 / 开头）');
+  });
+
+  it('rejects custom video without a payload instead of violating the check constraint', async () => {
+    const adminCookie = await adminLogin();
+    const course = await createCourse(adminCookie, { name: '空视频校验课程' });
+
+    for (const body of [
+      { title: '空 payload', body: '正文', video_mode: 'custom', video: null },
+      { title: '缺 payload', body: '正文', video_mode: 'custom' },
+    ]) {
+      const res = await adminRequest(
+        adminCookie,
+        'post',
+        `/admin/courses/${course.id}/chapters`,
+      )
+        .send(body)
+        .expect(400);
+      expect(res.body.errors).toContain('视频 src 不能为空');
+    }
+
+    const chapter = await adminRequest(
+      adminCookie,
+      'post',
+      `/admin/courses/${course.id}/chapters`,
+    )
+      .send({ title: '正常章节', body: '正文' })
+      .expect(201);
+    const badPatch = await adminRequest(
+      adminCookie,
+      'patch',
+      `/admin/courses/${course.id}/chapters/${chapter.body.chapter.idx}`,
+    )
+      .send({ video_mode: 'custom', video: null })
+      .expect(400);
+    expect(badPatch.body.errors).toContain('视频 src 不能为空');
+
+    // Course-level three-state shares the same validator.
+    const badCourse = await adminRequest(adminCookie, 'post', '/admin/courses')
+      .send({
+        name: '空视频课程',
+        category: '测试分类',
+        teacher: '测试老师',
+        video_mode: 'custom',
+        video: null,
+      })
+      .expect(400);
+    expect(badCourse.body.errors).toContain('视频 src 不能为空');
+    const badCoursePatch = await adminRequest(adminCookie, 'patch', `/admin/courses/${course.id}`)
+      .send({ video_mode: 'custom', video: null })
+      .expect(400);
+    expect(badCoursePatch.body.errors).toContain('视频 src 不能为空');
+  });
+
   it('appends chapters and keeps numbering gaps after deletion', async () => {
     const adminCookie = await adminLogin();
     const course = await createCourse(adminCookie, { name: '章节课程' });

@@ -43,6 +43,7 @@ import {
 } from './auth.js';
 import { AuditRowSchema, AuditResponseSchema } from './audit.js';
 import {
+  AdminChapterRowSchema,
   AdminCourseSchema,
   AdminCoursesResponseSchema,
   ChapterRowSchema,
@@ -144,14 +145,26 @@ export const MediaPresignBodySchema = z.object({
   contentType: z.string().trim().min(1).max(200),
 });
 
+export const MediaDriverSchema = z.enum(['local', 's3']);
+export type MediaDriver = z.infer<typeof MediaDriverSchema>;
+
 export const MediaPresignResponseSchema = z.object({
   key: z.string(),
   uploadUrl: z.string(),
   publicUrl: z.string(),
   expiresIn: z.number().int().positive(),
+  /** Active storage backend. */
+  driver: MediaDriverSchema,
+  /** Site-local media path to persist instead of the absolute/expiring URL. */
+  path: z.string(),
 });
 
-export const MediaUploadResponseSchema = z.object({ key: z.string(), url: z.string() });
+export const MediaUploadResponseSchema = z.object({
+  key: z.string(),
+  url: z.string(),
+  driver: z.literal('local'),
+  path: z.string(),
+});
 
 export type OpenApiDocument = {
   openapi: string;
@@ -405,6 +418,7 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
         CourseUpdateBody: CourseUpdateBodySchema,
         CourseMutationResponse: CourseMutationResponseSchema,
         CourseDeleteResponse: CourseDeleteResponseSchema,
+        AdminChapterRow: AdminChapterRowSchema,
         ChapterCreateBody: ChapterCreateBodySchema,
         ChapterUpdateBody: ChapterUpdateBodySchema,
         ChapterMutationResponse: ChapterMutationResponseSchema,
@@ -717,7 +731,8 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
         get: {
           tags: ['Chapters'],
           summary: '章节详情',
-          description: '返回章节正文、解析后的视频、该章到达率、关联测验与相邻章节。',
+          description:
+            '返回章节正文、按章节三态（inherit/custom/none）解析后的视频、该章到达率、关联测验与相邻章节；无视频时 `chapter.video:null`。',
           operationId: 'getChapter',
           security: ANONYMOUS,
           parameters: [
@@ -1184,7 +1199,8 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
         post: {
           tags: ['Media'],
           summary: '获取媒体上传预签名 URL',
-          description: '仅 `STORAGE_DRIVER=s3`（MinIO/AWS）时可用；返回短时有效的 PUT URL。',
+          description:
+            '`STORAGE_DRIVER=s3`（MinIO/AWS）返回短时有效的 PUT URL；`local` 返回本地直传端点。响应含 `driver` 与站内 `path`（`/api/v1/media/<key>`），客户端应持久化 `path` 而不是会过期/绝对化的 `publicUrl`。',
           operationId: 'presignMediaUpload',
           security: SESSION_CSRF,
           requestBody: { required: true, ...jsonBody(REF('MediaPresignBody')) },
@@ -1199,7 +1215,7 @@ export function buildOpenApiDocument(options: OpenApiBuildOptions = {}): OpenApi
           tags: ['Media'],
           summary: '直传媒体（本地驱动）',
           description:
-            '仅 `STORAGE_DRIVER=local` 可用；原始字节流，受 `MEDIA_MAX_BYTES` 限制（默认 50MB）。S3 模式请改用 presign。',
+            '仅 `STORAGE_DRIVER=local` 可用；原始字节流，受 `MEDIA_MAX_BYTES` 限制（默认 50MB）。S3 模式请改用 presign。响应含 `driver:"local"` 与站内 `path`。',
           operationId: 'uploadMedia',
           security: SESSION_CSRF,
           parameters: [

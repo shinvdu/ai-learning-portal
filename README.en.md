@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#stack)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Version note**: `v2.1.0` is the current release (the v2.0.0 product-grade rewrite plus P1: OpenAPI, data snapshots, SMTP, local/S3 media, and the SQLite importer) and requires Node ≥ 24 plus container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
+> **Version note**: `v2.1.0` is the current version (on `next`; it will merge to `main` and be tagged after final verification). It is the v2.0.0 product-grade rewrite plus P1: OpenAPI, data snapshots, SMTP, local/S3 media with an admin upload UI, per-chapter video, and the SQLite importer, and requires Node ≥ 24 plus container infrastructure. The `v1.2.0` tag remains permanently available as the zero-dependency, SQLite, single-file **offline teaching edition** — see [v1.2.0 offline edition](#c-v120-zero-dependency-offline-edition).
 >
 > All courses, chapters, quizzes and learning records are simulated. Pages and documents must not contain real names, accounts or company data.
 
@@ -34,16 +34,16 @@
 ## Features
 
 - **Course catalog**: five course cards with category filters, keyword search and learner/completion/score stats.
-- **Course detail**: intro, teacher, level, sample video and a chapter list with inferred reach rates.
-- **Chapter learning (30 chapters)**: lecture text, sample video with HTTP Range seeking, chapter quiz, reach vs. the rest of the course, previous/next chapter.
+- **Course detail**: intro, teacher, level, course video (inherit sample / custom / hidden) and a chapter list with inferred reach rates.
+- **Chapter learning (30 chapters)**: lecture text, per-chapter video (inherit the course video or override it, HTTP Range seeking; hidden shows an empty state), chapter quiz, reach vs. the rest of the course, previous/next chapter.
 - **Knowledge center**: summary, learning objectives, key points, glossary, FAQ, three quizzes with answers and explanations, source excerpts, and an AI-draft → human-edit comparison.
 - **Learning dashboard**: five KPIs, six ECharts charts, course filter, dataset status; admins can expand the data playground.
 - **Data insights**: records-driven insights, a metric formula table and common metric pitfalls.
 - **Authentication**: email registration/login/logout, email verification, forgot/reset password, TOTP MFA with one-time recovery codes, per-account lockout.
 - **Security**: Argon2id hashing (legacy scrypt upgrades transparently on login), PostgreSQL sessions (SHA-256 only), CSRF double-submit cookie + same-origin checks, Redis fixed-window rate limiting.
-- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (three-state video), audit log, learning-record CRUD, CSV import/export and demo-data reset, plus **dataset snapshots**: every import/reset is snapshotted first and any snapshot can be restored with one click (a restore is itself reversible).
+- **Admin area**: users (role/active/password/MFA/unlock), courses and chapters (course-level three-state video, per-chapter inherit/custom/hidden video), video and poster uploads (local raw upload or S3 presign, with progress and preview), audit log, learning-record CRUD, CSV import/export and demo-data reset, plus **dataset snapshots**: every import/reset is snapshotted first and any snapshot can be restored with one click (a restore is itself reversible).
 - **API docs**: an OpenAPI 3.1 spec generated from the zod contracts (`/api/v1/openapi.json`) and a Scalar reference UI (`/api/v1/docs`), gated in production by `ENABLE_API_DOCS`.
-- **Media and mail**: course media on local disk or S3/MinIO (`STORAGE_DRIVER`), and mail over webhook or built-in SMTP (`MAIL_TRANSPORT=smtp`).
+- **Media and mail**: course media on local disk or S3/MinIO (`STORAGE_DRIVER`), persisted as the stable site-local path `/api/v1/media/<key>`, and mail over webhook or built-in SMTP (`MAIL_TRANSPORT=smtp`).
 - **Operations**: Docker Compose dev/prod stacks, Nginx TLS/SPA/rate limiting, `/healthz` and `/readyz`, structured logs with `X-Request-Id`, `pg_dump` backup and restore scripts.
 
 ## Stack
@@ -114,7 +114,7 @@ npm ci
 cp .env.example .env
 set -a; . ./.env; set +a              # scripts do not load .env automatically
 
-# 3. Migrate + seed
+# 3. Migrate + seed (includes the 0002_chapter_video migration)
 npm run db:migrate
 npm run seed                          # dev imports the 177 demo records by default
 
@@ -230,15 +230,17 @@ npm run test:e2e      # Playwright smoke
 
 ## P1 capabilities and known limitations
 
-The following P1 capabilities are released in `v2.1.0`:
+The following P1 capabilities ship with `v2.1.0` (currently on `next`; verification is re-run before the final tag):
 
 - **OpenAPI + Scalar (F036)**: `/api/v1/openapi.json` and `/api/v1/docs`, see [API docs](docs/API.md).
 - **CSV snapshots and restore (F064)**: automatic snapshot before import/reset; the admin "data snapshots" tab restores any snapshot. See [API docs](docs/API.md) and [deployment](docs/DEPLOYMENT.md).
 - **SMTP (F049 extension)**: `MAIL_TRANSPORT=smtp` + `SMTP_URL`, see [deployment](docs/DEPLOYMENT.md).
 - **Local/S3 media (F094)**: `STORAGE_DRIVER` + `S3_*`; MinIO is available through the dev `media` profile, see [local development](docs/DEVELOPMENT.md).
+- **Admin media upload UI (F095)**: upload video and poster files from the course/chapter form over local raw upload or S3 presign, with progress, drag-and-drop and preview; the form stores the stable `/api/v1/media/<key>` path. See [feature notes](docs/features/F095-admin-media-upload-ui.md).
+- **Per-chapter video (F096)**: each chapter can inherit the course video, override it, or hide it; the public chapter API resolves the chapter's three-state video. Upgrading requires `npm run db:migrate` (`0002_chapter_video.sql`). See [feature notes](docs/features/F096-chapter-video.md).
 - **SQLite → PostgreSQL importer (F100)**: `npm run import:sqlite`; start with `--dry-run`, see [local development](docs/DEVELOPMENT.md).
 
-MinIO has been verified live (RELEASE.2024-12-18: presigned PUT/GET + Range 206 + course video reference); `v2.0.0 → v2.1.0` needs no database migration.
+MinIO has passed the baseline live verification (RELEASE.2024-12-18: presigned PUT/GET + Range 206 and the course video reference); the browser upload UI has been re-verified with both the local driver and MinIO. `v2.0.0 → v2.1.0` **requires a database migration** for the new chapter video columns (`npm run db:migrate`); migrate before seeding a fresh database too.
 
 New environment variables (full defaults and production requirements in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)):
 
@@ -250,6 +252,8 @@ New environment variables (full defaults and production requirements in [docs/DE
 | `STORAGE_DRIVER` | `local` | `local` or `s3` |
 | `MEDIA_DIR` | `./data/media` | Local media directory |
 | `MEDIA_MAX_BYTES` | `52428800` | Per-file upload cap (~50 MB) |
+| `VITE_MEDIA_MAX_BYTES` | empty (falls back to 50 MB) | Build-time client-side upload cap hint; the server's `MEDIA_MAX_BYTES` remains authoritative |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | Vite dev origins | Dev-compose MinIO only; origins allowed to do direct browser PUT uploads. Configure separately for an external MinIO |
 | `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | empty | Required for `STORAGE_DRIVER=s3`; credentials stay server-side |
 | `S3_ENDPOINT` | empty | Required for MinIO (e.g. `http://127.0.0.1:9000`); optional for AWS |
 | `S3_REGION` | `us-east-1` | S3 region |

@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](#技术栈)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **版本说明**：`v2.1.0` 是当前发布版（v2.0.0 产品级重写 + P1：OpenAPI、数据快照、SMTP、local/S3 媒体、SQLite 导入器），需要 Node ≥ 24 与容器基础设施。`v1.2.0` 标签永久保留为零依赖、SQLite、单文件的**离线教学版**，见 [v1.2.0 离线版](#c-v120-零依赖离线版)。
+> **版本说明**：`v2.1.0` 是当前版本（`next` 分支；待最终验证后合入 `main` 并打 tag），内容为 v2.0.0 产品级重写 + P1：OpenAPI、数据快照、SMTP、local/S3 媒体与管理端上传 UI、章节独立视频、SQLite 导入器，需要 Node ≥ 24 与容器基础设施。`v1.2.0` 标签永久保留为零依赖、SQLite、单文件的**离线教学版**，见 [v1.2.0 离线版](#c-v120-零依赖离线版)。
 >
 > 示例课程、章节、测验与学习记录全部为模拟数据；页面与文档不得包含真实姓名、账号或公司数据。
 
@@ -34,16 +34,16 @@
 ## 功能
 
 - **课程广场**：5 门课程卡片，分类筛选、关键字搜索、学习人数/完成率/成绩统计。
-- **课程详情**：简介、讲师、难度、示例视频、带推断到达率的章节目录。
-- **章节学习（30 章）**：讲义原文、示例视频（HTTP Range 支持拖动）、本章测验、到达率与全课程对比、上一章/下一章。
+- **课程详情**：简介、讲师、难度、课程视频（可继承示例/自定义/关闭）、带推断到达率的章节目录。
+- **章节学习（30 章）**：讲义原文、章节视频（可继承课程或单独配置，HTTP Range 支持拖动；关闭时显示空状态）、本章测验、到达率与全课程对比、上一章/下一章。
 - **知识中心**：课程摘要、学习目标、知识点、术语、FAQ、3 道带答案与解析的测验、原文摘录、AI 初稿 → 人工修正对照。
 - **学习看板**：5 个 KPI、6 张 ECharts 图表、课程筛选、数据源状态；管理员可展开数据演示面板。
 - **数据洞察**：由记录动态生成的洞察、指标公式表、常见口径误区。
 - **认证**：邮箱注册/登录/退出、邮箱验证、忘记/重置密码、TOTP MFA + 一次性恢复码、按账号锁定。
 - **安全**：Argon2id 密码哈希（旧 scrypt 登录后透明升级）、PostgreSQL 会话（仅存 SHA-256）、CSRF 双提交 Cookie + 同源校验、Redis 固定窗口限流。
-- **管理后台**：用户管理（角色/启停/密码/MFA/解锁）、课程与章节管理（视频三态）、审计日志、学习记录 CRUD、CSV 导入/导出/恢复示例数据，以及**数据快照**：每次导入/重置前自动快照，可一键恢复到任一快照（恢复本身也可回滚）。
+- **管理后台**：用户管理（角色/启停/密码/MFA/解锁）、课程与章节管理（课程级视频三态、章节视频继承/自定义/关闭）、视频与封面上传（local 直传或 S3 预签名，带进度与预览）、审计日志、学习记录 CRUD、CSV 导入/导出/恢复示例数据，以及**数据快照**：每次导入/重置前自动快照，可一键恢复到任一快照（恢复本身也可回滚）。
 - **API 文档**：由 zod 契约生成的 OpenAPI 3.1 规范（`/api/v1/openapi.json`）与 Scalar 交互式文档（`/api/v1/docs`）；生产可用 `ENABLE_API_DOCS` 开关。
-- **媒体与邮件**：课程媒体支持本地磁盘或 S3/MinIO 两种存储驱动（`STORAGE_DRIVER`），邮件支持 webhook 或内置 SMTP（`MAIL_TRANSPORT=smtp`）。
+- **媒体与邮件**：课程媒体支持本地磁盘或 S3/MinIO 两种存储驱动（`STORAGE_DRIVER`），上传后保存为稳定站内路径 `/api/v1/media/<key>`；邮件支持 webhook 或内置 SMTP（`MAIL_TRANSPORT=smtp`）。
 - **运维**：Docker Compose 开发/生产编排、Nginx TLS/SPA/限流、`/healthz` 与 `/readyz`、结构化日志与 `X-Request-Id`、`pg_dump` 备份与恢复脚本。
 
 ## 技术栈
@@ -115,7 +115,7 @@ npm ci
 cp .env.example .env
 set -a; . ./.env; set +a              # 脚本不会自动读取 .env，需显式导出
 
-# 3. 迁移 + 种子
+# 3. 迁移 + 种子（含章节视频迁移 0002_chapter_video）
 npm run db:migrate
 npm run seed                          # 开发环境默认导入 177 条示例记录
 
@@ -232,15 +232,17 @@ npm run test:e2e      # Playwright 冒烟
 
 ## P1 能力与已知限制
 
-以下 P1 能力已随 `v2.1.0` 发布：
+以下 P1 能力将随 `v2.1.0` 发布（当前在 `next`，最终 tag 前复跑验证）：
 
 - **OpenAPI + Scalar（F036）**：`/api/v1/openapi.json` 与 `/api/v1/docs`，见 [API 文档](docs/API.md)。
 - **CSV 快照与恢复（F064）**：导入/重置前自动快照，管理后台“数据快照”标签可恢复，见 [API 文档](docs/API.md)与[部署指南](docs/DEPLOYMENT.md)。
 - **SMTP（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`，见[部署指南](docs/DEPLOYMENT.md)。
 - **媒体 local/S3（F094）**：`STORAGE_DRIVER` + `S3_*`，开发可用 MinIO `media` profile，见[本地开发](docs/DEVELOPMENT.md)。
+- **管理端媒体上传（F095）**：课程/章节表单内直接上传视频与封面，local 原始直传或 S3 预签名 PUT，带进度、拖拽与预览；保存 `/api/v1/media/<key>` 稳定路径，见[功能说明](docs/features/F095-admin-media-upload-ui.md)。
+- **章节独立视频（F096）**：每章可继承课程视频、单独上传或关闭；公开页按章节解析，升级需 `npm run db:migrate`（`0002_chapter_video.sql`），见[功能说明](docs/features/F096-chapter-video.md)。
 - **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite`，先用 `--dry-run`，见[本地开发](docs/DEVELOPMENT.md)。
 
-MinIO 已完成实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）；`v2.0.0 → v2.1.0` 无需数据库迁移。
+MinIO 基线已完成实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）；上传 UI 的 local 与 MinIO 浏览器直传复验已通过。`v2.0.0 → v2.1.0` **需要数据库迁移**（新增章节视频列），执行 `npm run db:migrate`；全新库同样先迁移再 `seed`。
 
 新增环境变量（完整默认值与生产要求见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 与 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)）：
 
@@ -252,6 +254,8 @@ MinIO 已完成实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206
 | `STORAGE_DRIVER` | `local` | `local` 或 `s3` |
 | `MEDIA_DIR` | `./data/media` | 本地媒体目录 |
 | `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（约 50 MB） |
+| `VITE_MEDIA_MAX_BYTES` | 空（回退 50 MB） | 构建期前端上传上限提示；服务端 `MEDIA_MAX_BYTES` 仍为权威 |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | Vite 开发源 | 仅开发 compose 的 MinIO 使用；允许浏览器直传的源，生产用外部 MinIO 时需单独配置 |
 | `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 空 | `STORAGE_DRIVER=s3` 时必填；密钥仅服务端使用 |
 | `S3_ENDPOINT` | 空 | MinIO 必填（如 `http://127.0.0.1:9000`）；AWS 可省略 |
 | `S3_REGION` | `us-east-1` | S3 区域 |

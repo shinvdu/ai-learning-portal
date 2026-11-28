@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { adminApi } from '@/api/endpoints';
-import type { AdminCourse, ChapterRow } from '@/api/types';
+import type { AdminChapterRow, AdminCourse, ChapterFormPayload } from '@/api/types';
 import { errorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -39,7 +39,7 @@ const saving = ref(false);
 const saveError = ref('');
 
 const chapterOpen = ref(false);
-const chapterTarget = ref<ChapterRow | null>(null);
+const chapterTarget = ref<AdminChapterRow | null>(null);
 const chapterBusy = ref(false);
 const chapterError = ref('');
 const busyChapterIdx = ref<number | null>(null);
@@ -150,13 +150,13 @@ function openAddChapter(): void {
   chapterOpen.value = true;
 }
 
-function openEditChapter(chapter: ChapterRow): void {
+function openEditChapter(chapter: AdminChapterRow): void {
   chapterTarget.value = chapter;
   chapterError.value = '';
   chapterOpen.value = true;
 }
 
-async function submitChapter(payload: { title: string; body: string }): Promise<void> {
+async function submitChapter(payload: ChapterFormPayload): Promise<void> {
   const current = course.value;
   if (!current) return;
 
@@ -179,7 +179,7 @@ async function submitChapter(payload: { title: string; body: string }): Promise<
   }
 }
 
-async function removeChapter(chapter: ChapterRow): Promise<void> {
+async function removeChapter(chapter: AdminChapterRow): Promise<void> {
   const current = course.value;
   if (!current) return;
 

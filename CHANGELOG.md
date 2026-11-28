@@ -7,25 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.0] - 2026-11-28
 
-P1 增强已随 v2.1.0 发布。MinIO 实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）与 196 项测试 + 8 项 Playwright E2E 均已通过。
+P1 增强将随 v2.1.0 发布（当前 `next` 分支，待最终 tag）。MinIO 基线实机验收（RELEASE.2024-12-18：预签名 PUT/GET + Range 206 + 课程视频引用）已通过；当前分支 199 项 Vitest 通过（typecheck/lint/build 通过）。上传 UI 的 local 与 MinIO 浏览器直传复验已通过；Playwright E2E 与最终 tag 验证在发布前执行。
 
 ### Added
 
 - **OpenAPI 规范与 Scalar 文档（F036）**：`GET /api/v1/openapi.json` 返回由 zod 契约生成的 OpenAPI 3.1 规范（41 条路径，含媒体与数据快照）；`GET /api/v1/docs` 提供 Scalar 交互式文档。开发/测试默认开放，生产需显式 `ENABLE_API_DOCS=1`。旧 `/api` 别名同样可访问。
 - **CSV 数据集快照与恢复（F064）**：CSV 导入与“恢复示例数据”前自动写入 `record_snapshots`；管理后台新增“数据快照”标签页；`GET /api/v1/admin/dataset/snapshots` 列出快照，`POST /api/v1/admin/dataset/restore/:id` 恢复某个快照。恢复前会先把当前行保存为 `pre-restore` 快照，因此恢复本身也可再次回滚。
 - **SMTP 邮件传输（F049 扩展）**：`MAIL_TRANSPORT=smtp` + `SMTP_URL`（`smtp://` 或 `smtps://` 隐式 TLS），通过 nodemailer 发送；`SMTP_URL` 缺失时启动失败，不会静默降级。
-- **媒体存储 local / S3（F094）**：`STORAGE_DRIVER=local|s3`。本地驱动使用 `MEDIA_DIR` 与 `MEDIA_MAX_BYTES`；S3 驱动使用 `S3_*`（MinIO/AWS）。新增公开读取 `GET /api/v1/media/:key`（本地 Range 200/206/416，S3 返回 302 预签名跳转）、`POST /api/v1/admin/media/presign`、`POST /api/v1/admin/media/upload`。开发 compose 新增 `media` profile 运行 MinIO（主机 9000/9001）。
+- **媒体存储 local / S3（F094）**：`STORAGE_DRIVER=local|s3`。本地驱动使用 `MEDIA_DIR` 与 `MEDIA_MAX_BYTES`；S3 驱动使用 `S3_*`（MinIO/AWS）。新增公开读取 `GET /api/v1/media/:key`（本地 Range 200/206/416，S3 返回 302 预签名跳转）、`POST /api/v1/admin/media/presign`、`POST /api/v1/admin/media/upload`。presign/upload 响应新增 `driver` 与稳定站内 `path`（`/api/v1/media/<key>`）。开发 compose 新增 `media` profile 运行 MinIO（主机 9000/9001）。
+- **管理端媒体上传 UI（F095）**：课程/章节表单内直接上传视频与封面；local 走原始直传、S3 走预签名 PUT，带 XHR 进度、拖拽与 blob 预览；只保存稳定 `path`，不保存绝对/会过期的 `publicUrl`。为支持上传，CSP 增加 `media-src 'self' blob:`（并扩展 `img-src ... blob:`），Nginx 上传体上限由 3m 提到 64m，开发 MinIO 增加 `MINIO_API_CORS_ALLOW_ORIGIN`。
+- **章节独立视频（F096）**：新增迁移 `0002_chapter_video.sql`，为 `chapters` 增加 `video_mode`（默认 `inherit`）与 `video` jsonb 及 CHECK 约束。管理 API 的章节创建/更新接受三态与 payload；公开章节接口按 `custom`（章节）→ 内容包章节覆盖/课程解析视频→`none` 隐藏 的优先级返回 `chapter.video`（可为 `null`）。管理端章节编辑器支持继承/自定义/关闭与上传，章节列表显示模式标签。
 - **SQLite → PostgreSQL 导入器（F100）**：`npm run import:sqlite` / `scripts/import-sqlite.sh`，支持 `--dry-run`（只校验、不写库）、`--wipe`（先清空导入器负责的表）、`--include-sessions`；只读打开 v1 `data/portal.db`，在单个 PostgreSQL 事务中写入已迁移的目标库。
 
 ### Upgrade
 
-- `v2.0.0 → v2.1.0` 无需数据库迁移：`npm ci && npm run build` 后重启 API/Web 即可。
+- `v2.0.0 → v2.1.0` **需要数据库迁移**：`npm ci && npm run db:migrate && npm run build` 后重启 API/Web（生产 compose 的 `migrate` 任务会自动执行）。`0002_chapter_video.sql` 只新增 `chapters.video_mode`（默认 `inherit`）与 `chapters.video`，既有章节保持继承课程视频的行为。
 - 新增 P1 环境变量与 MinIO `media` profile；完整默认值见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
 ### Changed
 
 - `ENABLE_API_DOCS` 现在实际控制生产环境的 `/api/v1/docs`（此前为预留开关）；`/api/v1/openapi.json` 始终可读。
 - 生产配置校验新增：`MAIL_TRANSPORT=smtp` 需要 `SMTP_URL`；`STORAGE_DRIVER=s3` 需要 `S3_BUCKET`、`S3_ACCESS_KEY`、`S3_SECRET_KEY`。
+- 管理端课程视频改为上传/URL 双来源，章节新增视频三态；章节 `chapterDetails` 返回原始 `video_mode`/`video`。
+- 安全响应头与 Nginx：CSP 增加 `media-src`/blob 预览，上传体上限调整为 64m（API 仍限 2 MB JSON 与 `MEDIA_MAX_BYTES`）。
 - 审计新增动作 `data.snapshot_created`、`data.snapshot_restored`（只追加语义不变）。
 
 ## [2.0.0] - 2026-11-28

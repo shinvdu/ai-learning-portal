@@ -126,14 +126,31 @@ export async function listChapterRows(db: Db, courseId: string): Promise<Chapter
     .orderBy(chaptersTable.idx);
 }
 
+/** Public chapter row plus the raw video three-state fields (F096). */
+export type ChapterWithVideo = ChapterRow & {
+  video_mode: VideoMode;
+  video: CourseVideo | null;
+};
+
 /** One chapter by exact index, or `null` when it does not exist. */
-export async function findChapterRow(db: Db, courseId: string, idx: number): Promise<ChapterRow | null> {
+export async function findChapterRow(
+  db: Db,
+  courseId: string,
+  idx: number,
+): Promise<ChapterWithVideo | null> {
   const [chapter] = await db
-    .select({ idx: chaptersTable.idx, title: chaptersTable.title, body: chaptersTable.body })
+    .select({
+      idx: chaptersTable.idx,
+      title: chaptersTable.title,
+      body: chaptersTable.body,
+      video_mode: chaptersTable.video_mode,
+      video: chaptersTable.video,
+    })
     .from(chaptersTable)
     .where(and(eq(chaptersTable.course_id, courseId), eq(chaptersTable.idx, idx)))
     .limit(1);
-  return chapter ?? null;
+  if (!chapter) return null;
+  return { ...chapter, video: chapter.video ?? null };
 }
 
 /** Knowledge payload for a course, or `null` when the document is missing. */

@@ -275,7 +275,8 @@ export type ChapterCourse = {
   video: CourseVideo | null;
 };
 
-export type ChapterDetail = ChapterRow & { video: CourseVideo };
+/** Resolved chapter video; `null` when the chapter (or its course) has none. */
+export type ChapterDetail = ChapterRow & { video: CourseVideo | null };
 
 export type Quiz = {
   q: string;
@@ -424,9 +425,14 @@ export type DatasetRestoreResponse = {
 
 /* ---------------------------------- admin ----------------------------------- */
 
+export type AdminChapterRow = ChapterRow & {
+  video_mode: VideoMode;
+  video: CourseVideo | null;
+};
+
 export type AdminCourse = CourseMeta & {
   stats: CourseStats | null;
-  chapterDetails: ChapterRow[];
+  chapterDetails: AdminChapterRow[];
 };
 
 export type AdminCoursesResponse = { courses: AdminCourse[] };
@@ -447,6 +453,7 @@ export type CourseCreateBody = {
   color?: string;
   intro?: string;
   sort_order?: number;
+  video_mode?: VideoMode;
   video?: CourseVideoInput | null;
 };
 
@@ -455,10 +462,62 @@ export type CourseUpdateBody = Partial<CourseCreateBody>;
 export type CourseMutationResponse = { ok: true; course: CourseMeta };
 export type CourseDeleteResponse = { ok: true; deletedRecords: number };
 
-export type ChapterCreateBody = { title: string; body: string };
-export type ChapterUpdateBody = { title?: string; body?: string };
-export type ChapterMutationResponse = { ok: true; chapter: ChapterRow };
+export type ChapterCreateBody = {
+  title: string;
+  body: string;
+  video_mode?: VideoMode;
+  video?: CourseVideoInput | null;
+};
+export type ChapterUpdateBody = Partial<ChapterCreateBody>;
+export type ChapterMutationResponse = { ok: true; chapter: AdminChapterRow };
 export type ChapterDeleteResponse = { ok: true };
+
+/** Local form payload emitted by `ChapterDialog` (mirrors `ChapterCreateBody`). */
+export type ChapterFormPayload = {
+  title: string;
+  body: string;
+  video_mode: VideoMode;
+  video: CourseVideoInput | null;
+};
+
+/* ----------------------------------- media ---------------------------------- */
+
+export type MediaDriver = 'local' | 's3';
+
+export type MediaPresignInput = {
+  filename: string;
+  contentType: string;
+};
+
+/** `POST /admin/media/presign`; `path` is the permanent site-local URL. */
+export type MediaPresignResponse = {
+  key: string;
+  /** Presigned S3 PUT URL, or the local raw-upload endpoint. */
+  uploadUrl: string;
+  /** Absolute and possibly expiring; do not persist for course fields. */
+  publicUrl: string;
+  expiresIn: number;
+  driver: MediaDriver;
+  path: string;
+};
+
+/** `POST /admin/media/upload` (local driver only). */
+export type MediaUploadResponse = {
+  key: string;
+  url: string;
+  driver: 'local';
+  path: string;
+};
+
+/** Normalised result emitted by `MediaUploader`; `path` is what fields store. */
+export type MediaUploaded = {
+  key: string;
+  path: string;
+  contentType: string;
+  filename: string;
+  size: number;
+  driver: MediaDriver;
+};
 
 export type AdminUser = {
   id: number;

@@ -1,6 +1,6 @@
 {
-  "id": "b8d3b7c2-9387-4341-a8ea-aad37638b90f",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "9ab3c1fe-54a0-4758-8ebc-6c70b044efdd",
+  "prevId": "b8d3b7c2-9387-4341-a8ea-aad37638b90f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -286,6 +286,20 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "video_mode": {
+          "name": "video_mode",
+          "type": "video_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'inherit'"
+        },
+        "video": {
+          "name": "video",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -315,7 +329,12 @@
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "chapters_video_mode_payload": {
+          "name": "chapters_video_mode_payload",
+          "value": "((\"chapters\".\"video_mode\" = 'custom') = (\"chapters\".\"video\" is not null))"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.courses": {

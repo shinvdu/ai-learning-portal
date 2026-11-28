@@ -230,8 +230,18 @@ export const chapters = pgTable(
     idx: integer('idx').notNull(),
     title: text('title').notNull(),
     body: text('body').notNull(),
+    // Same three-state video model as courses (ADR-008). `inherit` falls back
+    // to `CHAPTER_VIDEOS[`${course_id}-${idx}`]` and then the course video.
+    video_mode: videoMode('video_mode').notNull().default('inherit'),
+    video: jsonb('video').$type<CourseVideo>(),
   },
-  (t) => [primaryKey({ columns: [t.course_id, t.idx], name: 'chapters_pkey' })],
+  (t) => [
+    primaryKey({ columns: [t.course_id, t.idx], name: 'chapters_pkey' }),
+    check(
+      'chapters_video_mode_payload',
+      sql`((${t.video_mode} = 'custom') = (${t.video} is not null))`,
+    ),
+  ],
 );
 
 /* -------------------------------- knowledge ------------------------------ */

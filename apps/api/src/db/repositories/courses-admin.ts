@@ -19,17 +19,16 @@ import {
   courses as coursesTable,
   knowledge as knowledgeTable,
   records as recordsTable,
-  type CourseVideo,
   type Db,
-  type VideoMode,
 } from '@portal/db';
 import { byCourse, groupEnrollments } from '@portal/domain';
-import type { CourseStats, ChapterRow, CourseMeta } from '@portal/contracts';
+import type { AdminChapterRow, CourseStats, CourseMeta } from '@portal/contracts';
+import { resolveCreateVideo, resolveUpdateVideo } from '../../lib/video.js';
 import { listRecords, resolveCourseVideo } from './catalog.js';
 
 export type AdminCourse = CourseMeta & {
   stats: CourseStats | null;
-  chapterDetails: ChapterRow[];
+  chapterDetails: AdminChapterRow[];
 };
 
 export type CourseMutationFailure = {
@@ -82,21 +81,29 @@ async function readCourseRows(db: Db): Promise<RawCourseRow[]> {
     .orderBy(asc(coursesTable.sort_order), asc(coursesTable.id_num), asc(coursesTable.id));
 }
 
-async function readChapterDetails(db: Db): Promise<Map<string, ChapterRow[]>> {
+async function readChapterDetails(db: Db): Promise<Map<string, AdminChapterRow[]>> {
   const rows = await db
     .select({
       course_id: chaptersTable.course_id,
       idx: chaptersTable.idx,
       title: chaptersTable.title,
       body: chaptersTable.body,
+      video_mode: chaptersTable.video_mode,
+      video: chaptersTable.video,
     })
     .from(chaptersTable)
     .orderBy(asc(chaptersTable.course_id), asc(chaptersTable.idx));
 
-  const byCourseId = new Map<string, ChapterRow[]>();
+  const byCourseId = new Map<string, AdminChapterRow[]>();
   for (const row of rows) {
     const list = byCourseId.get(row.course_id);
-    const detail: ChapterRow = { idx: row.idx, title: row.title, body: row.body };
+    const detail: AdminChapterRow = {
+      idx: row.idx,
+      title: row.title,
+      body: row.body,
+      video_mode: row.video_mode,
+      video: row.video ?? null,
+    };
     if (list) list.push(detail);
     else byCourseId.set(row.course_id, [detail]);
   }
@@ -146,97 +153,6 @@ function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23505'
   );
-}
-
-const SAFE_LOCAL_PATH = (value: string): boolean =>
-  value === '' || (/^\/(?!\/)/.test(value) && !value.includes('..') && !value.includes('\\'));
-
-const VIDEO_MODES: readonly VideoMode[] = ['inherit', 'custom', 'none'];
-
-type VideoResolution = { errors: string[]; mode?: VideoMode; video?: CourseVideo | null };
-
-function normalizeVideoPayload(value: unknown): { errors: string[]; video: CourseVideo | null } {
-  if (value === null || value === undefined) return { errors: [], video: null };
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    return { errors: ['视频 src 不能为空'], video: null };
-  }
-  const input = value as Record<string, unknown>;
-  const src = String(input.src ?? '').trim();
-  const poster = String(input.poster ?? '').trim();
-  if (!src) return { errors: ['视频 src 不能为空'], video: null };
-  if (!SAFE_LOCAL_PATH(src) || !SAFE_LOCAL_PATH(poster)) {
-    return { errors: ['视频与封面必须使用站内路径（以 / 开头）'], video: null };
-  }
-  return {
-    errors: [],
-    video: {
-      src: src.slice(0, 500),
-      poster: poster.slice(0, 500),
-      durationText: String(input.durationText ?? '示例视频').trim().slice(0, 40),
-      label: '课程导览视频',
-      note: String(input.note ?? '示例视频，可在后台替换。').trim().slice(0, 200),
-      isPlaceholder: true,
-    },
-  };
-}
-
-function readMode(value: unknown): { errors: string[]; mode?: VideoMode } {
-  if (value === undefined) return { errors: [] };
-  if (typeof value === 'string' && (VIDEO_MODES as readonly string[]).includes(value)) {
-    return { errors: [], mode: value as VideoMode };
-  }
-  return { errors: ['video_mode 只能是 inherit、custom 或 none'] };
-}
-
-/** Create-time three-state resolution (absent video means no video). */
-function resolveCreateVideo(input: Record<string, unknown>): VideoResolution {
-  const modeResult = readMode(input.video_mode);
-  if (modeResult.errors.length > 0) return { errors: modeResult.errors };
-  const mode =
-    modeResult.mode ?? (input.video === undefined || input.video === null ? 'none' : 'custom');
-
-  if (mode === 'custom') {
-    const payload = normalizeVideoPayload(input.video);
-    if (payload.errors.length > 0) return { errors: payload.errors };
-    return { errors: [], mode, video: payload.video };
-  }
-  return { errors: [], mode, video: null };
-}
-
-type UpdateVideoState = {
-  existingMode: VideoMode;
-  existingVideo: CourseVideo | null;
-};
-
-function resolveUpdateVideo(
-  input: Record<string, unknown>,
-  state: UpdateVideoState,
-): VideoResolution {
-  const hasMode = input.video_mode !== undefined;
-  const hasVideo = input.video !== undefined;
-  if (!hasMode && !hasVideo) return { errors: [] };
-
-  const modeResult = readMode(input.video_mode);
-  if (modeResult.errors.length > 0) return { errors: modeResult.errors };
-
-  let mode: VideoMode;
-  if (modeResult.mode) mode = modeResult.mode;
-  else if (input.video === null) mode = 'none';
-  else mode = 'custom';
-
-  if (mode === 'custom') {
-    if (hasVideo) {
-      const payload = normalizeVideoPayload(input.video);
-      if (payload.errors.length > 0) return { errors: payload.errors };
-      return { errors: [], mode, video: payload.video };
-    }
-    if (state.existingMode === 'custom' && state.existingVideo) {
-      return { errors: [], mode, video: state.existingVideo };
-    }
-    return { errors: ['视频 src 不能为空'] };
-  }
-
-  return { errors: [], mode, video: null };
 }
 
 function trimField(input: Record<string, unknown>, key: string): string {

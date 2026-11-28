@@ -53,7 +53,7 @@ Link: </api/v1/...>; rel="successor-version"
 | 403 | 非管理员、CSRF/同源失败、未验证邮箱、生产禁用演示重置 |
 | 404 | 未知 API、课程/章节/用户/记录不存在 |
 | 409 | 唯一约束冲突、MFA 已启用、课程仍有记录（未 `force`） |
-| 413 | 请求体超过 2 MB |
+| 413 | JSON 请求体超过 2 MB，或原始媒体上传超过 `MEDIA_MAX_BYTES` |
 | 423 | 账号临时锁定（15 分钟） |
 | 429 | 触发限流 |
 | 502 | 邮件网关失败（`code: "MAIL_FAILED"`） |
@@ -160,7 +160,7 @@ POST /api/v1/auth/mfa/disable { "password": "..." }
 | GET | `/meta` | 站点概览、数据集元信息、课程引用（id/name/category） |
 | GET | `/courses?q=&category=` | 课程列表（含每课统计）、全部分类、站点概览 |
 | GET | `/courses/:idOrName` | 课程详情、课程统计、推断的章节到达率 |
-| GET | `/chapters/:courseId/:idx` | 章节、课程、视频、章节统计、相关测验、上/下一章 |
+| GET | `/chapters/:courseId/:idx` | 章节、课程、**按章节三态解析后的视频**、章节统计、相关测验、上/下一章；无视频时 `chapter.video: null` |
 | GET | `/knowledge/:id` | 课程知识中心文档；无文档时 `knowledge: null` |
 | GET | `/dashboard?course=` | 学习看板数据（KPI、图表分组、洞察、数据质量） |
 | GET | `/insights` | 数据洞察（含公式、常见误区、分课程统计） |
@@ -169,7 +169,8 @@ POST /api/v1/auth/mfa/disable { "password": "..." }
 - `q` 同时匹配课程名、简介、讲师、分类；`category` 为精确匹配；课程概览不受筛选影响。
 - `dashboard?course=` 为精确课程名；未知课程回退为全站数据，`filter` 返回 `null`。
 - 章节 `idx` 必须为非负十进制整数；非数字返回 `接口不存在`，课程不存在返回 `课程不存在`，索引不存在返回 `章节不存在`。
-- 公开端点只返回聚合结果，不暴露原始记录、`video_mode` / `video_json` 内部状态。
+- 章节视频解析（F096）：章节 `none` → `null`；`custom` → 章节 payload；`inherit` → 内容包静态章节覆盖（若有），否则课程解析后的视频（课程 `custom` → 课程 payload；课程 `inherit` → 内容包/`DEMO_VIDEO`；课程 `none` → `null`）。
+- 公开端点只返回聚合结果，不暴露原始记录与原始 `video_mode` / `video` 管理字段；章节详情只给解析后的 `chapter.video`（可为 `null`）。
 
 示例：
 
@@ -197,15 +198,27 @@ curl -s 'http://127.0.0.1:8787/api/v1/chapters/C3/4'
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/courses` | 课程列表（含统计与章节正文） |
-| POST | `/admin/courses` | 新建课程；id 来自 `course_seq`（种子后从 `C6` 开始） |
-| PATCH | `/admin/courses/:id` | 更新元数据与视频三态（`inherit/custom/none`） |
+| GET | `/admin/courses` | 课程列表（含统计、章节正文与章节原始视频字段 `video_mode`/`video`） |
+| POST | `/admin/courses` | 新建课程；id 来自 `course_seq`（种子后从 `C6` 开始）；可选 `video_mode`/`video` |
+| PATCH | `/admin/courses/:id` | 更新元数据与**课程级**视频三态（`inherit/custom/none`） |
 | DELETE | `/admin/courses/:id` | 有记录时返回 `409 {conflict,records}`；`?force=1` 事务内删除记录→章节→知识→课程 |
-| POST | `/admin/courses/:courseId/chapters` | 追加章节（`MAX(idx)+1`， advisory lock 串行） |
-| PATCH | `/admin/courses/:courseId/chapters/:idx` | 修改标题/正文 |
+| POST | `/admin/courses/:courseId/chapters` | 追加章节（`MAX(idx)+1`， advisory lock 串行）；可选 `video_mode`/`video`，缺省 `inherit` |
+| PATCH | `/admin/courses/:courseId/chapters/:idx` | 修改标题/正文/视频三态；`none`/`inherit` 清空 `video` |
 | DELETE | `/admin/courses/:courseId/chapters/:idx` | 删除指定章节，保留编号空洞 |
 
-课程改名不会改写历史记录（`records.course_id` 外键，展示时 join 当前课程名）。
+课程改名不会改写历史记录（`records.course_id` 外键，展示时 join 当前课程名）。课程与章节视频 `src`/`poster` 只接受站内路径（`/` 开头、非 `//`、无 `..`/反斜杠），含 `/api/v1/media/<key>`；外站与协议相对地址返回 `400`。
+
+章节视频请求体示例：
+
+```json
+POST /api/v1/admin/courses/C6/chapters
+{ "title": "第 1 章", "body": "...", "video_mode": "custom",
+  "video": { "src": "/api/v1/media/<key>.mp4", "poster": "/api/v1/media/<posterKey>.jpg", "durationText": "1:24" } }
+
+PATCH /api/v1/admin/courses/C6/chapters/1
+{ "video_mode": "inherit" }   // 跟随课程视频
+{ "video_mode": "none" }      // 隐藏本章视频
+```
 
 ### 学习记录与 CSV
 
@@ -238,10 +251,18 @@ curl -s 'http://127.0.0.1:8787/api/v1/chapters/C3/4'
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/admin/media/presign` | 请求体 `{filename, contentType}` → `{key, uploadUrl, publicUrl, expiresIn}`（`expiresIn` 为 900 秒）。S3 返回预签名 PUT；本地返回 `/admin/media/upload?key=...` 上传地址 |
-| POST | `/admin/media/upload?key=&filename=` | 仅本地驱动；原始字节流（`application/octet-stream` 或视频/MIME），受 `MEDIA_MAX_BYTES` 限制，超限 `413`；返回 `201 {key, url}`。S3 模式返回 `400`，应改用 presign |
+| POST | `/admin/media/presign` | 请求体 `{filename, contentType}` → `{key, uploadUrl, publicUrl, expiresIn, driver, path}`（`expiresIn` 为 900 秒）。S3 返回预签名 PUT；本地返回 `/admin/media/upload?key=...` 上传地址。`driver` 为 `local`/`s3` |
+| POST | `/admin/media/upload?key=&filename=` | 仅本地驱动；原始字节流（`application/octet-stream` 或视频/MIME），受 `MEDIA_MAX_BYTES` 限制，超限 `413`；返回 `201 {key, url, driver:"local", path}`。S3 模式返回 `400`，应改用 presign |
 
-把课程视频指向媒体对象：在上传得到 `key` 后，用管理后台课程表单把视频模式设为 `custom`，`src` 填站内路径 `/api/v1/media/<key>`（封面同理填 `/api/v1/media/<posterKey>`；`src`/`poster` 必须以 `/` 开头，不接受外站或协议相对地址）。
+**持久化 `path`，不要保存 `publicUrl`/`url`**：`path` 是不过期、非绝对的站内地址 `/api/v1/media/<key>`；`publicUrl` 在 `S3_PUBLIC_URL` 配置时可能是外部 CDN 地址，未配置时是短时预签名 URL。管理后台的上传器（F095）已按此规则回填课程/章节的 `src`/`poster`。
+
+```json
+// 200 POST /admin/media/presign（S3 驱动）
+{ "key": "9f....mp4", "uploadUrl": "https://s3.example/put?...", "publicUrl": "https://cdn.example/media/9f....mp4",
+  "expiresIn": 900, "driver": "s3", "path": "/api/v1/media/9f....mp4" }
+```
+
+把课程/章节视频指向媒体对象：在上传得到 `key` 后，用管理后台表单（课程或章节）把视频模式设为 `custom`，`src` 填 `/api/v1/media/<key>`（封面同理填 `/api/v1/media/<posterKey>`；`src`/`poster` 必须以 `/` 开头，不接受外站或协议相对地址）。管理后台可直接选择文件上传，local 驱动走原始直传，S3 驱动由浏览器按预签名 URL 直传（需桶/MinIO CORS）。
 
 ```bash
 # 本地驱动：上传 mp4（管理员会话，带 CSRF/Origin，同浏览器行为）
@@ -249,7 +270,7 @@ curl -b jar.txt -H "X-CSRF-Token: $(awk '$6=="aip_csrf"{print $7}' jar.txt)" \
   -H 'Origin: http://127.0.0.1:8787' \
   -H 'Content-Type: video/mp4' --data-binary @sample.mp4 \
   'http://127.0.0.1:8787/api/v1/admin/media/upload?filename=sample.mp4'
-# → 201 {"key":"<hex>.mp4","url":"http://.../api/v1/media/<hex>.mp4"}
+# → 201 {"key":"<hex>.mp4","url":"http://.../api/v1/media/<hex>.mp4","driver":"local","path":"/api/v1/media/<hex>.mp4"}
 curl -r 0-99 -i 'http://127.0.0.1:8787/api/v1/media/<hex>.mp4'   # → 206 Partial Content
 ```
 

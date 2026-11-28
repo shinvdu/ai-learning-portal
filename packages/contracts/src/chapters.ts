@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { SimpleOkResponseSchema } from './common.js';
-import { ChapterRowSchema, ChapterStatSchema, CourseVideoSchema } from './courses.js';
+import {
+  AdminChapterRowSchema,
+  ChapterRowSchema,
+  ChapterStatSchema,
+  CourseVideoInputSchema,
+  CourseVideoSchema,
+  VideoModeSchema,
+} from './courses.js';
 import { QuizSchema } from './knowledge.js';
 
 export const ChapterCourseSchema = z.object({
@@ -15,7 +22,8 @@ export const ChapterCourseSchema = z.object({
 export type ChapterCourse = z.infer<typeof ChapterCourseSchema>;
 
 export const ChapterDetailSchema = ChapterRowSchema.extend({
-  video: CourseVideoSchema,
+  /** Resolved chapter video; `null` when the chapter (or its course) has none. */
+  video: CourseVideoSchema.nullable(),
 });
 
 export type ChapterDetail = z.infer<typeof ChapterDetailSchema>;
@@ -50,6 +58,8 @@ export type ChapterResponse = z.infer<typeof ChapterResponseSchema>;
 const ChapterBodyBaseSchema = z.object({
   title: z.string().trim().min(1, '章节标题不能为空').max(160, '章节标题过长'),
   body: z.string().trim().min(1, '章节正文不能为空').max(50000, '章节正文过长'),
+  video_mode: VideoModeSchema.optional(),
+  video: CourseVideoInputSchema.nullable().optional(),
 });
 
 export const ChapterCreateBodySchema = ChapterBodyBaseSchema;
@@ -60,7 +70,7 @@ export type ChapterUpdateBody = z.infer<typeof ChapterUpdateBodySchema>;
 
 export const ChapterMutationResponseSchema = z.object({
   ok: z.literal(true),
-  chapter: ChapterRowSchema,
+  chapter: AdminChapterRowSchema,
 });
 
 export type ChapterMutationResponse = z.infer<typeof ChapterMutationResponseSchema>;

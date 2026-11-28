@@ -46,6 +46,14 @@ export const ChapterRowSchema = z.object({
 
 export type ChapterRow = z.infer<typeof ChapterRowSchema>;
 
+/** Admin view of a chapter, including the raw video three-state fields. */
+export const AdminChapterRowSchema = ChapterRowSchema.extend({
+  video_mode: VideoModeSchema,
+  video: CourseVideoSchema.nullable(),
+});
+
+export type AdminChapterRow = z.infer<typeof AdminChapterRowSchema>;
+
 export const ChapterStatSchema = z.object({
   idx: z.number().int(),
   title: z.string(),
@@ -155,7 +163,7 @@ export type CourseUpdateBody = z.infer<typeof CourseUpdateBodySchema>;
 
 export const AdminCourseSchema = CourseMetaSchema.extend({
   stats: CourseStatsSchema.nullable(),
-  chapterDetails: z.array(ChapterRowSchema),
+  chapterDetails: z.array(AdminChapterRowSchema),
 });
 
 export type AdminCourse = z.infer<typeof AdminCourseSchema>;

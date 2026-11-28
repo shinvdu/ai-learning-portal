@@ -15,7 +15,12 @@ export function securityHeaders(env: Env): RequestHandler {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        imgSrc: ["'self'", 'data:'],
+        // blob: is for pre-upload poster/video previews (URL.createObjectURL).
+        // Cross-origin object-storage origins are deliberately NOT allowed:
+        // course/chapter media must persist the site-local
+        // /api/v1/media/<key> path, which this origin serves.
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        mediaSrc: ["'self'", 'blob:'],
         styleSrc: ["'self'", "'unsafe-inline'"],
         scriptSrc: ["'self'"],
         connectSrc: ["'self'"],

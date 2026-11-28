@@ -3,11 +3,13 @@ import { computed, reactive, ref, useId, watch } from 'vue';
 import type { AdminCourse, VideoMode } from '@/api/types';
 import AppButton from '@/components/ui/AppButton.vue';
 import AppInput from '@/components/ui/AppInput.vue';
-import {
-  VIDEO_MODE_OPTIONS,
-  courseVideoMode,
-  type AdminCoursePayload,
-} from './adminCourseApi';
+import VideoConfigFields from './VideoConfigFields.vue';
+import { courseVideoMode, type AdminCoursePayload } from './adminCourseApi';
+
+/** Media API paths come from uploads; anything else is a manual local URL. */
+function videoSourceOf(video: { src?: string | null } | null | undefined): 'upload' | 'url' {
+  return video?.src?.startsWith('/api/v1/media/') ? 'upload' : 'url';
+}
 
 const props = defineProps<{
   course: AdminCourse | null;
@@ -31,11 +33,14 @@ const form = reactive({
   sortOrder: '1',
   intro: '',
   videoMode: 'inherit' as VideoMode,
+  videoSource: 'upload' as 'upload' | 'url',
   videoSrc: '',
   videoPoster: '',
   videoDuration: '',
   videoNote: '',
 });
+
+const uploading = ref(false);
 
 const fieldErrors = reactive<Record<string, string | undefined>>({});
 const introId = useId();
@@ -55,10 +60,12 @@ function fillFromCourse(): void {
     form.sortOrder = String(props.nextSort);
     form.intro = '';
     form.videoMode = 'inherit';
+    form.videoSource = 'upload';
     form.videoSrc = '';
     form.videoPoster = '';
     form.videoDuration = '';
     form.videoNote = '';
+    uploading.value = false;
     return;
   }
 
@@ -71,10 +78,12 @@ function fillFromCourse(): void {
   form.sortOrder = String(course.sort_order);
   form.intro = course.intro ?? '';
   form.videoMode = courseVideoMode(course);
+  form.videoSource = videoSourceOf(course.video);
   form.videoSrc = course.video?.src ?? '';
   form.videoPoster = course.video?.poster ?? '';
   form.videoDuration = course.video?.durationText ?? course.video?.duration ?? '';
   form.videoNote = course.video?.note ?? '';
+  uploading.value = false;
 }
 
 watch(() => props.course, fillFromCourse, { immediate: true });
@@ -146,6 +155,10 @@ function customVideoPayload(): AdminCoursePayload['video'] {
 }
 
 function submit(): void {
+  if (uploading.value) {
+    fieldErrors.videoSrc = '视频仍在上传，请等待上传完成。';
+    return;
+  }
   if (!validate()) return;
   emit('submit', buildPayload());
 }
@@ -234,60 +247,21 @@ const describedByIntro = computed(() => (fieldErrors.intro ? introErrorId : unde
         </label>
       </div>
 
-      <fieldset class="video-modes">
-        <legend>课程视频</legend>
-        <label v-for="option in VIDEO_MODE_OPTIONS" :key="option.id" class="video-mode">
-          <input
-            type="radio"
-            name="video_mode"
-            :value="option.id"
-            :checked="form.videoMode === option.id"
-            :disabled="busy"
-            @change="form.videoMode = option.id"
-          />
-          <span>
-            <strong>{{ option.label }}</strong>
-            <small>{{ option.hint }}</small>
-          </span>
-        </label>
-      </fieldset>
-
-      <div v-if="form.videoMode === 'custom'" class="form-grid video-fields">
-        <AppInput
-          v-model="form.videoSrc"
-          label="视频地址"
-          required
-          :maxlength="500"
-          placeholder="/assets/course-intro.mp4"
-          hint="必须是以 / 开头的站内路径。"
-          :disabled="busy"
-          :error="fieldErrors.videoSrc"
-        />
-        <AppInput
-          v-model="form.videoPoster"
-          label="封面地址"
-          :maxlength="500"
-          placeholder="/assets/course-intro-poster.jpg"
-          :disabled="busy"
-          :error="fieldErrors.videoPoster"
-        />
-        <AppInput
-          v-model="form.videoDuration"
-          label="时长文本"
-          :maxlength="40"
-          placeholder="8 秒"
-          :disabled="busy"
-          :error="fieldErrors.videoDuration"
-        />
-        <AppInput
-          v-model="form.videoNote"
-          label="备注"
-          :maxlength="200"
-          placeholder="示例视频，可在后台替换。"
-          :disabled="busy"
-          :error="fieldErrors.videoNote"
-        />
-      </div>
+      <VideoConfigFields
+        v-model:mode="form.videoMode"
+        v-model:source="form.videoSource"
+        v-model:src="form.videoSrc"
+        v-model:poster="form.videoPoster"
+        v-model:duration-text="form.videoDuration"
+        v-model:note="form.videoNote"
+        context="course"
+        :disabled="busy"
+        :src-error="fieldErrors.videoSrc"
+        :poster-error="fieldErrors.videoPoster"
+        :duration-error="fieldErrors.videoDuration"
+        :note-error="fieldErrors.videoNote"
+        @uploading="uploading = $event"
+      />
 
       <div v-if="serverError" class="form-error" role="alert">{{ serverError }}</div>
       <div v-else-if="Object.keys(fieldErrors).length > 0" class="form-error" role="alert">
@@ -304,8 +278,8 @@ const describedByIntro = computed(() => (fieldErrors.intro ? introErrorId : unde
         >
           删除课程
         </AppButton>
-        <AppButton type="submit" :loading="busy">
-          {{ isEdit ? '保存修改' : '创建课程' }}
+        <AppButton type="submit" :loading="busy" :disabled="uploading">
+          {{ uploading ? '视频上传中…' : isEdit ? '保存修改' : '创建课程' }}
         </AppButton>
       </div>
     </form>
@@ -315,55 +289,6 @@ const describedByIntro = computed(() => (fieldErrors.intro ? introErrorId : unde
 <style scoped>
 .course-actions {
   justify-content: space-between;
-}
-
-.video-modes {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px 14px;
-  margin: 16px 0 0;
-}
-
-.video-modes legend {
-  padding: 0 6px;
-  font-size: 12.5px;
-  font-weight: 700;
-  color: #4b5568;
-}
-
-.video-mode {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 7px 4px;
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--ink);
-  cursor: pointer;
-}
-
-.video-mode input {
-  width: 16px;
-  height: 16px;
-  min-height: 0;
-  margin-top: 3px;
-  accent-color: var(--teal);
-}
-
-.video-mode strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.video-mode small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.video-fields {
-  margin-top: 14px;
 }
 
 input[type='color'] {

@@ -1,6 +1,6 @@
 # 本地开发环境（v2）
 
-> 分支：`next` · 验证日期：2026-11-28 · 状态：已启动并验证
+> 分支：`next` · 验证日期：2026-11-28 · 状态：开发进程当前已停止；下列命令与口径仍有效
 > 生产部署见 [DEPLOYMENT.md](DEPLOYMENT.md)；v1.2.0 零依赖离线版见文末。
 
 ## 1. 当前状态
@@ -15,9 +15,9 @@
 | 缓存/限流 | Redis 7（容器端口 6380，开发用 DB 0） |
 | 数据 | 5 门课 / 30 章 / 5 知识 / 177 条记录 |
 | golden 指标 | 24 学生 / 5 课程 / 58 选课 / 74.3% / 86.4 / 165.3h |
-| 进程 | `npm run dev`（`tsx watch` + `vite`）；当前后台实例日志 `/tmp/portal-dev.log` |
+| 进程 | `npm run dev`（`tsx watch` + `vite`）；当前 API/Vite 已停止，按 §3 重新启动 |
 
-已实际验证：`/healthz` 200、`/readyz` 200、Vite 200、`/api/v1/meta` 返回 golden 值、管理员登录 200、`/api/v1/dashboard?course=Python 数据分析` 返回 17 人 / 55.9%。
+最后验证（2026-11-28）：`/healthz` 200、`/readyz` 200、Vite 200、`/api/v1/meta` 返回 golden 值、管理员登录 200、`/api/v1/dashboard?course=Python 数据分析` 返回 17 人 / 55.9%。
 
 ## 2. 版本与前提
 
@@ -50,6 +50,7 @@ chmod 600 .env
 # 编辑 ADMIN_EMAIL / ADMIN_PASSWORD；MAIL_FROM 含空格，必须保留引号
 
 # 4. 迁移 + 种子（开发默认导入 177 条示例记录）
+#    迁移含 0002_chapter_video（章节独立视频），升级已有库也必须执行
 set -a; . ./.env; set +a
 npm run db:migrate
 npm run seed
@@ -105,7 +106,9 @@ VITE_API_TARGET=http://127.0.0.1:8788 npm run dev -w @portal/web
 | `SMTP_URL` | 未设置 | 仅 `MAIL_TRANSPORT=smtp` 需要；如 `smtp://user:pass@127.0.0.1:1025`（本地可用 Mailpit/MailHog） |
 | `STORAGE_DRIVER` | `local` | `local` 或 `s3`（本地开发一般保持 `local`） |
 | `MEDIA_DIR` | `./data/media` | 本地媒体目录（gitignored） |
-| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限 |
+| `MEDIA_MAX_BYTES` | `52428800` | 单文件上传上限（服务端权威） |
+| `VITE_MEDIA_MAX_BYTES` | 未设置（回退 50 MB） | 仅 Vite 构建期前端提示；不改服务端限制 |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | 仅 compose MinIO | 允许浏览器直传的源，默认 `http://127.0.0.1:5173,http://localhost:5173`；API 不读取 |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 未设置 | 仅 `STORAGE_DRIVER=s3` 需要；MinIO 用 §13 的 profile 提供 |
 | `S3_REGION` / `S3_FORCE_PATH_STYLE` / `S3_PUBLIC_URL` | `us-east-1` / `1` / 空 | MinIO 默认路径风格 |
 | `SEED_DEMO_RECORDS` | `1` | 允许示例记录 |
@@ -142,7 +145,7 @@ psql "$DATABASE_URL" -c "delete from users where email='admin@local.test';"
 | `npm run dev -w @portal/web` | 只启动 Vite（5173） |
 | `npm run typecheck` | `tsc -b` 全仓类型检查 |
 | `npm run lint` | ESLint |
-| `npm test` | Vitest：domain/content/contracts/config + API 集成（150 项） |
+| `npm test` | Vitest：domain/content/contracts/config + API 集成（199 项） |
 | `npm run test:e2e` | Playwright smoke（需先 build + 准备数据库） |
 | `npm run build` | 构建所有 workspace（含 Vue） |
 | `npm run db:migrate` | 应用 `packages/db/drizzle` 迁移 |
@@ -271,11 +274,20 @@ v1 与 v2 数据完全独立（SQLite 文件 vs PostgreSQL）。切换前先停�
 - 登录：`admin@local.test` 200，返回 `role=admin`
 - Python 数据分析筛选：17 人 / 55.9% / 81.1
 - 数据库：5 课程 / 30 章节 / 5 知识 / 177 记录
-- 测试：`npm test` 150 项通过；CI E2E 8 项通过
+- 测试：`npm test` 199 项通过（含章节视频三态/校验与媒体 `driver`/`path` 断言）；`npm run typecheck`、`npm run lint`、`npm run build` 通过。上传 UI 已在 local 与 MinIO 上实机复验；E2E 沿用 v2.1.0 P1 基线，最终打 tag 前复跑。
 
-## 13. 媒体存储与 MinIO（本地）
+## 13. 媒体存储、上传与 MinIO（本地）
 
-默认 `STORAGE_DRIVER=local`，上传文件落在 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 Range。需要验证 S3 路径时，用 compose 的 `media` profile 起 MinIO（不会随默认 `docker compose up` 启动）：
+默认 `STORAGE_DRIVER=local`，上传文件落在 `MEDIA_DIR`（默认 `./data/media`），由 `GET /api/v1/media/:key` 流式返回并支持 Range。管理端课程/章节表单可直接上传视频与封面（`MediaUploader`）：
+
+- `local`：`POST /api/v1/admin/media/upload` 原始直传（XHR 进度、CSRF、413 友好提示）。
+- `s3`：浏览器按 presign 返回的 `uploadUrl` 直接 `PUT`（`credentials: 'omit'`），需要对象存储 CORS；失败时上传器提示检查 CORS。
+- 表单只保存 presign 的稳定 `path`（`/api/v1/media/<key>`），不保存绝对/会过期的 `publicUrl`。
+- Nginx（容器内与示例）已把 `client_max_body_size` 提到 64m；CSP 已允许 `media-src 'self' blob:` 与 `img-src ... blob:`，用于上传前预览。
+
+章节可独立配置视频（F096）：编辑章节时选择“继承课程视频 / 自定义本章视频 / 不显示视频”。自定义可上传或填站内 URL；公开章节页按章节三态解析，`none` 显示空状态。该能力依赖迁移 `0002_chapter_video.sql`。
+
+需要验证 S3 路径时，用 compose 的 `media` profile 起 MinIO（不会随默认 `docker compose up` 启动）：
 
 ```bash
 docker compose --profile media up -d minio minio-init
@@ -296,8 +308,9 @@ S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=1
 ```
 
-重启 API 后，管理端“课程管理 → 视频 → custom”可填 `src=/api/v1/media/<key>`；也可直接调 `POST /api/v1/admin/media/presign` 获取预签名 PUT 并上传。
+重启 API 后，管理端“课程管理 → 视频 → custom”可直接上传文件（或填 `src=/api/v1/media/<key>`）；章节编辑同样支持上传。也可直接调 `POST /api/v1/admin/media/presign` 获取预签名 PUT 并上传。
 
+- 开发 compose 的 MinIO 已设置 `MINIO_API_CORS_ALLOW_ORIGIN`（默认 Vite 5173 源）；改用其它前端源时同步该变量，否则浏览器直传预检失败。
 - 端口 9000/9001 被占用时，在 compose 覆盖里改成 `9010:9000` / `9011:9001`，并同步 `S3_ENDPOINT`。
 - 本地媒体在 `data/media`，默认不纳入 git；`docker compose down -v` 不会删除宿主机目录，但会删 MinIO 的 `minio_data` 卷。
 - 不想用 S3 时把 `STORAGE_DRIVER` 改回 `local` 即可，公开页面不受影响。

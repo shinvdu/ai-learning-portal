@@ -18,22 +18,27 @@
 ## 行为与范围
 
 - 存储适配器 local/s3，环境变量选择。
-- 管理端获取预签名上传/播放 URL。
+- 管理端获取预签名上传/播放 URL；响应含 `driver` 与稳定站内 `path`（`/api/v1/media/<key>`），课程/章节应持久化 `path` 而不是绝对、会过期的 `publicUrl`。
+- 管理端上传 UI 由 [F095](F095-admin-media-upload-ui.md) 提供：local 原始直传或 S3 预签名 PUT，含进度与预览。
 - 本地开发可继续用 public/assets 占位视频。
-- MinIO 通过 compose profile 启动。
+- MinIO 通过 compose profile 启动；浏览器直传需 CORS（compose 的 `MINIO_API_CORS_ALLOW_ORIGIN`）。
+- 前端 CSP 已允许 `media-src 'self' blob:`，Nginx 上传体上限提到 64m。
 
 ## 验收标准
 
-- [ ] s3 模式下视频 URL 可播放且支持 Range。
-- [ ] 切换 local 不影响现有页面。
-- [ ] 预签名 URL 有有效期。
-- [ ] 密钥不进入前端。
+- [x] s3 模式下视频 URL 可播放且支持 Range。
+- [x] 切换 local 不影响现有页面。
+- [x] 预签名 URL 有有效期，稳定 `path` 不过期。
+- [x] 密钥不进入前端。
+- [x] 管理端可完成上传（local/S3）并写回站内路径（local 与 S3 浏览器直传均已实机复验，S3 保存 `/api/v1/media/<key>` 后 302→Range 206）。
 
-## 代码位置（计划）
+## 代码位置
 
 - `apps/api/src/modules/media/`
-- `compose.yml`
+- `apps/web/src/components/admin/MediaUploader.vue`（F095）
+- `apps/web/src/api/endpoints.ts`（`mediaApi`）
+- `compose.yml`、`apps/api/src/middleware/security-headers.ts`、`apps/web/nginx/default.conf`
 
 ## 备注
 
-本期不做转码与 HLS。
+本期不做转码与 HLS。媒体 API 与上传 UI 现已配套：API 负责存储与鉴权，UI 负责浏览器上传与 `path` 回填。

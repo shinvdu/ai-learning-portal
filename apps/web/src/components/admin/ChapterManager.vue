@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ChapterRow } from '@/api/types';
+import type { AdminChapterRow, VideoMode } from '@/api/types';
 import AppButton from '@/components/ui/AppButton.vue';
 
 const props = defineProps<{
-  chapters: ChapterRow[];
+  chapters: AdminChapterRow[];
   /** Index whose delete is in flight, if any. */
   busyIdx: number | null;
 }>();
 
 const emit = defineEmits<{
   add: [];
-  edit: [chapter: ChapterRow];
-  remove: [chapter: ChapterRow];
+  edit: [chapter: AdminChapterRow];
+  remove: [chapter: AdminChapterRow];
 }>();
+
+const VIDEO_MODE_LABELS: Record<VideoMode, string> = {
+  inherit: '继承课程视频',
+  custom: '自定义视频',
+  none: '无视频',
+};
 
 const nextIdx = computed(() => {
   const max = props.chapters.reduce((acc, chapter) => Math.max(acc, chapter.idx), 0);
@@ -31,7 +37,9 @@ function excerpt(body: string): string {
     <div class="panel-head">
       <div>
         <h2 id="chapter-manager-title">章节管理</h2>
-        <p class="panel-sub">章节正文支持多段文本；删除章节会保留编号空位，不会重新编号。</p>
+        <p class="panel-sub">
+          章节正文支持多段文本，视频可继承课程、单独上传或关闭；删除章节会保留编号空位，不会重新编号。
+        </p>
       </div>
       <AppButton size="sm" @click="emit('add')">＋ 新增章节</AppButton>
     </div>
@@ -40,7 +48,12 @@ function excerpt(body: string): string {
       <li v-for="chapter in chapters" :key="chapter.idx" :aria-busy="busyIdx === chapter.idx || undefined">
         <span class="chapter-no" aria-hidden="true">{{ String(chapter.idx).padStart(2, '0') }}</span>
         <div class="chapter-info">
-          <h3>{{ chapter.title }}</h3>
+          <div class="chapter-title-row">
+            <h3>{{ chapter.title }}</h3>
+            <span class="chapter-video-tag" :class="`is-${chapter.video_mode}`">
+              {{ VIDEO_MODE_LABELS[chapter.video_mode] }}
+            </span>
+          </div>
           <p class="chapter-sub">{{ excerpt(chapter.body) }}</p>
         </div>
         <div class="chapter-actions">
@@ -118,8 +131,35 @@ function excerpt(body: string): string {
   flex: 1;
 }
 
+.chapter-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .chapter-info h3 {
   font-size: 14.5px;
+}
+
+.chapter-video-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef1f7;
+  color: #4b5568;
+  white-space: nowrap;
+}
+
+.chapter-video-tag.is-custom {
+  background: #e9f6f7;
+  color: #087d82;
+}
+
+.chapter-video-tag.is-none {
+  background: #f4f0e8;
+  color: #8a6d3b;
 }
 
 .chapter-sub {

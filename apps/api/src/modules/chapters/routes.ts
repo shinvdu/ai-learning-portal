@@ -12,19 +12,42 @@
 import { Router } from 'express';
 import { chapterStats as buildChapterStats, groupEnrollments } from '@portal/domain';
 import { CHAPTER_VIDEO_DEFAULT, CHAPTER_VIDEOS } from '@portal/content';
-import type { Quiz } from '@portal/contracts';
+import type { CourseVideo, Quiz } from '@portal/contracts';
 import { notFound } from '../../lib/errors.js';
 import { appDeps } from '../../lib/types.js';
-import { findChapterRow, findCourse, getKnowledgePayload, listChapterRows, listCourses, listRecords } from '../../db/repositories/catalog.js';
+import {
+  findChapterRow,
+  findCourse,
+  getKnowledgePayload,
+  listChapterRows,
+  listCourses,
+  listRecords,
+  type CatalogCourse,
+  type ChapterWithVideo,
+} from '../../db/repositories/catalog.js';
 
 export const chaptersRouter = Router();
 
 const DIGITS = /^\d+$/;
 const CHAPTER_SOURCE = /第\s*(\d+)\s*章/;
 
-/** Chapter-specific video override, else the shared default placeholder. */
-function resolveChapterVideo(courseId: string, idx: number) {
-  return CHAPTER_VIDEOS[`${courseId}-${idx}`] ?? CHAPTER_VIDEO_DEFAULT;
+/**
+ * Resolve a chapter's public video (F096). Precedence:
+ *  - `none`   → `null`
+ *  - `custom` → the chapter payload
+ *  - `inherit`→ `CHAPTER_VIDEOS['<courseId>-<idx>']` when present, otherwise the
+ *    course's resolved video (`inherit` content default / `custom` / `none`).
+ */
+function resolveChapterVideo(
+  chapter: Pick<ChapterWithVideo, 'video_mode' | 'video'>,
+  course: CatalogCourse,
+  idx: number,
+): CourseVideo | null {
+  if (chapter.video_mode === 'none') return null;
+  if (chapter.video_mode === 'custom') return chapter.video ?? null;
+  const override = CHAPTER_VIDEOS[`${course.id}-${idx}`];
+  if (override) return { ...(course.video ?? CHAPTER_VIDEO_DEFAULT), ...override };
+  return course.video;
 }
 
 chaptersRouter.get('/chapters/:courseId/:idx', async (req, res) => {
@@ -69,7 +92,12 @@ chaptersRouter.get('/chapters/:courseId/:idx', async (req, res) => {
       chapters: course.chapters,
       video: course.video,
     },
-    chapter: { ...chapter, video: resolveChapterVideo(course.id, idx) },
+    chapter: {
+      idx: chapter.idx,
+      title: chapter.title,
+      body: chapter.body,
+      video: resolveChapterVideo(chapter, course, idx),
+    },
     stats,
     chapterStats: allChapterStats,
     relatedQuiz,
